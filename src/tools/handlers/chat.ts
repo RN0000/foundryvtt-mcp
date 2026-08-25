@@ -3,6 +3,7 @@
  */
 
 import type { FoundryClient } from '../../foundry/client.js';
+import { stripHtml } from '../../utils/sanitize.js';
 import { withToolError } from './utils.js';
 
 export async function handleGetChatMessages(
@@ -27,8 +28,7 @@ export async function handleGetChatMessages(
       .map((m) => {
         const speaker = m.speaker?.alias || userMap.get(m.user) || 'Unknown';
         const time = new Date(m.timestamp).toLocaleTimeString();
-        const content = m.content
-          .replace(/<[^>]+>/g, '')
+        const content = stripHtml(m.content)
           .trim()
           .slice(0, 200);
         return `[${time}] **${speaker}**: ${content}`;

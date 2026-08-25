@@ -130,7 +130,7 @@ const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 function sanitize(doc: Record<string, unknown>): Record<string, unknown> {
   const clean: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(doc)) {
-    if (FORBIDDEN_KEYS.has(key)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype' || FORBIDDEN_KEYS.has(key)) {
       continue;
     }
     clean[key] = value;
@@ -147,14 +147,14 @@ function setDotPath(target: Record<string, unknown>, path: string, value: unknow
   let curr = target;
   for (let i = 0; i < parts.length - 1; i++) {
     const part = parts[i];
-    if (!part || FORBIDDEN_KEYS.has(part)) return;
+    if (!part || part === '__proto__' || part === 'constructor' || part === 'prototype' || FORBIDDEN_KEYS.has(part)) return;
     if (!isRecord(curr[part])) {
       curr[part] = {};
     }
     curr = curr[part] as Record<string, unknown>;
   }
   const last = parts[parts.length - 1];
-  if (!last || FORBIDDEN_KEYS.has(last)) return;
+  if (!last || last === '__proto__' || last === 'constructor' || last === 'prototype' || FORBIDDEN_KEYS.has(last)) return;
   if (value === null) {
     delete curr[last];
   } else if (isRecord(value) && isRecord(curr[last])) {
@@ -174,7 +174,7 @@ function setDotPath(target: Record<string, unknown>, path: string, value: unknow
  */
 function mergePatch(target: Record<string, unknown>, patch: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(patch)) {
-    if (FORBIDDEN_KEYS.has(key)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype' || FORBIDDEN_KEYS.has(key)) {
       continue;
     }
     if (key.includes('.')) {

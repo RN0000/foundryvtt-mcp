@@ -7,6 +7,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import type { ModuleBridge } from '../../foundry/module-bridge.js';
+import { stripHtml } from '../../utils/sanitize.js';
 import { withToolError } from './utils.js';
 
 /**
@@ -112,7 +113,7 @@ export async function handleLookupRule(
     for (const j of worldJournals) {
       for (const page of j.pages ?? []) {
         const text = page.text?.content ?? '';
-        const plain = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+        const plain = stripHtml(text).replace(/\s+/g, ' ');
         const idx = plain.toLowerCase().indexOf(query.toLowerCase());
         if (idx !== -1) {
           const start = Math.max(0, idx - 60);

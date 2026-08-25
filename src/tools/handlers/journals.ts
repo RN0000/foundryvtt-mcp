@@ -4,6 +4,7 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import { stripHtml } from '../../utils/sanitize.js';
 import { withToolError } from './utils.js';
 
 export async function handleSearchJournals(
@@ -55,11 +56,9 @@ export async function handleGetJournal(args: { journalId: string }, foundryClien
     const pages =
       journal.pages
         ?.map((p) => {
-          const content =
-            p.text?.content
-              ?.replace(/<[^>]+>/g, '')
-              .trim()
-              .slice(0, 500) || '';
+          const content = stripHtml(p.text?.content || '')
+            .trim()
+            .slice(0, 500);
           return `### ${p.name}\n${content}${content.length >= 500 ? '...' : ''}`;
         })
         .join('\n\n') || 'No pages.';
