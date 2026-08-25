@@ -2793,6 +2793,7 @@ export const moduleBridgeTools = [
         },
       },
       required: ['targetDir', 'filename'],
+      oneOf: [{ required: ['contentBase64'] }, { required: ['sourcePath'] }],
     },
   },
 ];
