@@ -7,9 +7,12 @@ import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { AttributePatch, FoundryClient, WallType } from '../foundry/client.js';
 import type { ModuleBridge } from '../foundry/module-bridge.js';
 import type {
+  ActorEffectChangeInput,
+  ActorEffectDurationInput,
   ActorItemCreateSource,
   DocumentVisibility,
   JournalPageCreateSource,
+  OWNERSHIP_LEVELS,
 } from '../foundry/types.js';
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
@@ -44,6 +47,13 @@ import {
 } from './handlers/diagnostics.js';
 // Import all tool handlers
 import { handleRollDice } from './handlers/dice.js';
+import {
+  handleCreateActorEffect,
+  handleDeleteActorEffect,
+  handleListActorEffects,
+  handleUpdateActorEffect,
+} from './handlers/effects.js';
+import { handleWatchEvents } from './handlers/events.js';
 import { handleGenerateLoot, handleGenerateNPC, handleLookupRule } from './handlers/generation.js';
 import {
   handleCreateActorItem,
@@ -59,9 +69,30 @@ import { handleGetJournal, handleSearchJournals } from './handlers/journals.js';
 import {
   handleCaptureScene,
   handleGetDocumentSchema,
+  handleGetTargets,
+  handleImportCompendiumActor,
+  handlePingCanvas,
   handleRollAndPost,
   handleSearchCompendiumContent,
+  handleSetPause,
+  handleSetTarget,
+  handleUploadAsset,
 } from './handlers/module-bridge.js';
+import {
+  handleCreateDrawing,
+  handleCreateLight,
+  handleCreateNote,
+  handleCreateRegion,
+  handleCreateSound,
+  handleCreateTemplate,
+  handleDeleteDrawing,
+  handleDeleteLight,
+  handleDeleteNote,
+  handleDeleteRegion,
+  handleDeleteSound,
+  handleDeleteTemplate,
+  handleUpdateLight,
+} from './handlers/placeable-mutations.js';
 import { handleReadResource } from './handlers/resources.js';
 import {
   handleCreateRollTable,
@@ -70,21 +101,11 @@ import {
   handleRollTable,
 } from './handlers/roll-tables.js';
 import {
-  handleCreateFolder,
-  handleCreateMacro,
-  handleCreatePlaylist,
-  handleDeleteMacro,
-  handleDeletePlaylist,
-  handleListFolders,
-  handleListMacros,
-  handleListPlaylists,
-  handleSetPlaylistState,
-} from './handlers/world-documents.js';
-import {
   handleCreateScene,
   handleDeleteScene,
   handleResetFog,
   handleSetSceneLighting,
+  handleSetSceneWeather,
   handleSwitchScene,
 } from './handlers/scene-mutations.js';
 import {
@@ -93,6 +114,7 @@ import {
   handleListDrawings,
   handleListLights,
   handleListNotes,
+  handleListRegions,
   handleListSceneAssets,
   handleListSounds,
   handleListTemplates,
@@ -100,23 +122,7 @@ import {
   handleListTokens,
   handleListWalls,
 } from './handlers/scenes.js';
-import {
-  handleCreateDrawing,
-  handleCreateLight,
-  handleCreateNote,
-  handleCreateSound,
-  handleCreateTemplate,
-  handleDeleteDrawing,
-  handleDeleteLight,
-  handleDeleteNote,
-  handleDeleteSound,
-  handleDeleteTemplate,
-  handleUpdateLight,
-} from './handlers/placeable-mutations.js';
-import {
-  handleGetWorldSetting,
-  handleSetWorldSetting,
-} from './handlers/settings.js';
+import { handleGetWorldSetting, handleSetWorldSetting } from './handlers/settings.js';
 import { handleCreateTile, handleDeleteTile } from './handlers/tile-mutations.js';
 import {
   handleApplyStatusEffect,
@@ -127,7 +133,7 @@ import {
   handleSpawnToken,
   handleUpdateTokenVision,
 } from './handlers/token-mutations.js';
-import { handleGetUsers } from './handlers/users.js';
+import { handleGetUsers, handleSetUserRole } from './handlers/users.js';
 import {
   handleCreateWall,
   handleDeleteWall,
@@ -138,6 +144,18 @@ import {
   handleRefreshWorldData,
   handleSearchWorld,
 } from './handlers/world.js';
+import {
+  handleCreateFolder,
+  handleCreateMacro,
+  handleCreatePlaylist,
+  handleDeleteMacro,
+  handleDeletePlaylist,
+  handleListFolders,
+  handleListMacros,
+  handleListPlaylists,
+  handleSetDocumentOwnership,
+  handleSetPlaylistState,
+} from './handlers/world-documents.js';
 import { toolRegistry } from './registry.js';
 
 /**
@@ -356,6 +374,11 @@ export async function routeToolRequest(
       );
     case 'reset_fog':
       return handleResetFog(args as { sceneId?: string }, foundryClient);
+    case 'set_scene_weather':
+      if (!('weather' in args) || typeof args.weather !== 'string') {
+        throw new Error('Missing required parameter: weather');
+      }
+      return handleSetSceneWeather(args as { weather: string; sceneId?: string }, foundryClient);
 
     // Tile read tools
     case 'list_scene_assets':
@@ -458,6 +481,8 @@ export async function routeToolRequest(
       return handleListDrawings(args as { sceneId?: string }, foundryClient);
     case 'list_templates':
       return handleListTemplates(args as { sceneId?: string }, foundryClient);
+    case 'list_regions':
+      return handleListRegions(args as { sceneId?: string }, foundryClient);
 
     // Placeable mutation tools (WRITE)
     case 'create_light':
@@ -619,6 +644,35 @@ export async function routeToolRequest(
         throw new Error('Missing required parameter: templateId');
       }
       return handleDeleteTemplate(args as { templateId: string; sceneId?: string }, foundryClient);
+    case 'create_region':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      return handleCreateRegion(
+        args as {
+          name: string;
+          sceneId?: string;
+          color?: string;
+          visibility?: number;
+          elevation?: { bottom?: number; top?: number };
+          shapes?: Array<
+            | { type: 'rectangle'; x: number; y: number; width: number; height: number }
+            | { type: 'circle'; x: number; y: number; radius: number }
+            | { type: 'polygon'; points: number[] }
+          >;
+          behaviors?: Array<{
+            type: string;
+            system?: Record<string, unknown>;
+            disabled?: boolean;
+          }>;
+        },
+        foundryClient,
+      );
+    case 'delete_region':
+      if (!('regionId' in args) || typeof args.regionId !== 'string') {
+        throw new Error('Missing required parameter: regionId');
+      }
+      return handleDeleteRegion(args as { regionId: string; sceneId?: string }, foundryClient);
 
     // Combat tools
     case 'get_combat_state':
@@ -771,6 +825,14 @@ export async function routeToolRequest(
     // User tools
     case 'get_users':
       return handleGetUsers(args, foundryClient);
+    case 'set_user_role':
+      if (!('userId' in args) || typeof args.userId !== 'string') {
+        throw new Error('Missing required parameter: userId');
+      }
+      if (!('role' in args) || typeof args.role !== 'string') {
+        throw new Error('Missing required parameter: role');
+      }
+      return handleSetUserRole(args as { userId: string; role: string }, foundryClient);
 
     // Journal tools
     case 'search_journals':
@@ -840,6 +902,71 @@ export async function routeToolRequest(
           rollMode?: string;
         },
         moduleBridge,
+      );
+    case 'import_compendium_actor':
+      if (!('compendiumId' in args) || typeof args.compendiumId !== 'string') {
+        throw new Error('Missing required parameter: compendiumId');
+      }
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      return handleImportCompendiumActor(
+        args as { compendiumId: string; actorId: string; folderId?: string; name?: string },
+        foundryClient,
+        moduleBridge,
+      );
+    case 'set_target':
+      if (!('tokenIds' in args) || !Array.isArray(args.tokenIds)) {
+        throw new Error('Missing required parameter: tokenIds');
+      }
+      return handleSetTarget(
+        args as { tokenIds: string[]; targeted?: boolean; replace?: boolean },
+        moduleBridge,
+      );
+    case 'get_targets':
+      return handleGetTargets(args, moduleBridge);
+    case 'ping_canvas':
+      if (!('x' in args) || typeof args.x !== 'number') {
+        throw new Error('Missing required parameter: x');
+      }
+      if (!('y' in args) || typeof args.y !== 'number') {
+        throw new Error('Missing required parameter: y');
+      }
+      return handlePingCanvas(args as { x: number; y: number; sceneId?: string }, moduleBridge);
+    case 'set_pause':
+      return handleSetPause(args as { paused?: boolean }, moduleBridge);
+    case 'upload_asset':
+      if (!('targetDir' in args) || typeof args.targetDir !== 'string') {
+        throw new Error('Missing required parameter: targetDir');
+      }
+      if (!('filename' in args) || typeof args.filename !== 'string') {
+        throw new Error('Missing required parameter: filename');
+      }
+      return handleUploadAsset(
+        args as {
+          targetDir: string;
+          filename: string;
+          contentBase64?: string;
+          sourcePath?: string;
+          mimeType?: string;
+        },
+        moduleBridge,
+      );
+
+    // World-event tools (read-only)
+    case 'watch_events':
+      return handleWatchEvents(
+        args as {
+          cursor?: string;
+          waitMs?: number;
+          limit?: number;
+          kinds?: string[];
+          types?: string[];
+          actions?: string[];
+          sceneId?: string;
+          excludeSelf?: boolean;
+        },
+        foundryClient,
       );
 
     // World tools
@@ -972,6 +1099,24 @@ export async function routeToolRequest(
         throw new Error('Missing required parameter: playlistId');
       }
       return handleDeletePlaylist(args as { playlistId: string }, foundryClient);
+    case 'set_document_ownership':
+      if (!('documentType' in args) || typeof args.documentType !== 'string') {
+        throw new Error('Missing required parameter: documentType');
+      }
+      if (!('documentId' in args) || typeof args.documentId !== 'string') {
+        throw new Error('Missing required parameter: documentId');
+      }
+      if (!('entries' in args) || !Array.isArray(args.entries)) {
+        throw new Error('Missing required parameter: entries');
+      }
+      return handleSetDocumentOwnership(
+        args as {
+          documentType: 'Actor' | 'Item' | 'Scene' | 'JournalEntry' | 'RollTable' | 'Macro';
+          documentId: string;
+          entries: Array<{ target: string; level: keyof typeof OWNERSHIP_LEVELS }>;
+        },
+        foundryClient,
+      );
 
     // Settings tools
     case 'get_world_setting':
@@ -986,10 +1131,7 @@ export async function routeToolRequest(
       if (!('value' in args)) {
         throw new Error('Missing required parameter: value');
       }
-      return handleSetWorldSetting(
-        args as { key: string; value: unknown },
-        foundryClient,
-      );
+      return handleSetWorldSetting(args as { key: string; value: unknown }, foundryClient);
 
     // Generation tools
     case 'generate_npc':
@@ -1028,6 +1170,70 @@ export async function routeToolRequest(
       );
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
+
+    // ActiveEffect tools (general-purpose; apply_status_effect above stays
+    // the simpler idempotent status toggle)
+    case 'create_actor_effect':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      return handleCreateActorEffect(
+        args as {
+          actorId: string;
+          sceneId?: string;
+          tokenId?: string;
+          name: string;
+          img?: string;
+          description?: string;
+          disabled?: boolean;
+          statuses?: string[];
+          duration?: ActorEffectDurationInput;
+          changes?: ActorEffectChangeInput[];
+        },
+        foundryClient,
+      );
+    case 'update_actor_effect':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      if (!('effectId' in args) || typeof args.effectId !== 'string') {
+        throw new Error('Missing required parameter: effectId');
+      }
+      return handleUpdateActorEffect(
+        args as {
+          actorId: string;
+          sceneId?: string;
+          tokenId?: string;
+          effectId: string;
+          name?: string;
+          img?: string;
+          description?: string;
+          disabled?: boolean;
+          statuses?: string[];
+          duration?: ActorEffectDurationInput;
+          changes?: ActorEffectChangeInput[];
+        },
+        foundryClient,
+      );
+    case 'delete_actor_effect':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      if (!('effectId' in args) || typeof args.effectId !== 'string') {
+        throw new Error('Missing required parameter: effectId');
+      }
+      return handleDeleteActorEffect(
+        args as { actorId: string; sceneId?: string; tokenId?: string; effectId: string },
+        foundryClient,
+      );
+    case 'list_actor_effects':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      return handleListActorEffects(args as { actorId: string }, foundryClient);
 
     default:
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);

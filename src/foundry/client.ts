@@ -15,12 +15,16 @@ import {
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
+import { isRecord } from '../utils/guards.js';
 import { getImageSize, type ImageSize } from '../utils/image-size.js';
 import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import { evaluateDiceFormula } from './dice-formula.js';
+import type { EventFilter, EventReadResult } from './event-log.js';
+import { summarizeDocumentBroadcast, WorldEventLog } from './event-log.js';
 import type {
   ActorAttributeUpdateResult,
+  ActorEffectInput,
   ActorItemCreateSource,
   ActorSearchResult,
   CompendiumSearchResult,
@@ -42,7 +46,7 @@ import type {
   WorldScene,
   WorldUser,
 } from './types.js';
-import { VISIBILITY_LEVELS } from './types.js';
+import { ACTIVE_EFFECT_MODES, OWNERSHIP_LEVELS, USER_ROLES, VISIBILITY_LEVELS } from './types.js';
 import {
   applyDocumentBroadcast,
   applyUserActivity,
@@ -165,6 +169,36 @@ function hasHttpResponse(error: unknown): boolean {
 }
 
 /**
+ * Maps {@link ActorEffectInput.changes} mode names to FoundryVTT's numeric
+ * `CONST.ACTIVE_EFFECT_MODES`, throwing on an unrecognized name rather than
+ * forwarding `NaN` or an arbitrary number to the wire.
+ */
+function mapEffectChanges(
+  changes: ActorEffectInput['changes'],
+): Array<{ key: string; mode: number; value: string; priority?: number }> | undefined {
+  if (!changes) {
+    return undefined;
+  }
+  return changes.map((change) => {
+    const mode = ACTIVE_EFFECT_MODES[change.mode];
+    if (mode === undefined) {
+      throw new Error(
+        `Invalid effect change mode "${change.mode}": expected one of ${Object.keys(ACTIVE_EFFECT_MODES).join(', ')}`,
+      );
+    }
+    const mapped: { key: string; mode: number; value: string; priority?: number } = {
+      key: change.key,
+      mode,
+      value: change.value,
+    };
+    if (change.priority !== undefined) {
+      mapped.priority = change.priority;
+    }
+    return mapped;
+  });
+}
+
+/**
  * Spacing between sibling `sort` values, mirroring Foundry's
  * `CONST.SORT_INTEGER_DENSITY`. Leaving every sibling at the default `0` makes
  * ordering depend on incidental collection insertion order, and gives Foundry
@@ -235,6 +269,11 @@ export interface FoundryClientConfig {
    * to supply them.
    */
   dataPath?: string;
+  /**
+   * Capacity of the in-memory world-event ring backing `watch_events`
+   * (FOUNDRY_EVENT_BUFFER_SIZE). Defaults to 500 when unset.
+   */
+  eventBufferSize?: number;
 }
 
 /** Minimal shape of FoundryVTT's `modifyDocument` Socket.IO acknowledgement. */
@@ -314,6 +353,7 @@ export interface SceneLight {
   hidden: boolean;
   dim: number;
   bright: number;
+
   color: string | null;
   angle: number;
   animationType: string | null;
@@ -391,6 +431,18 @@ export interface SceneTemplate {
 }
 
 /**
+ * One entry returned by {@link FoundryClient.listRegions} (FoundryVTT v12+).
+ */
+export interface SceneRegion {
+  id: string;
+  name: string;
+  color: string | null;
+  elevation: { bottom: number | null; top: number | null };
+  shapesCount: number;
+  behaviorsCount: number;
+}
+
+/**
  * One entry returned by {@link FoundryClient.listFolders}.
  */
 export interface WorldFolderEntry {
@@ -445,6 +497,8 @@ export class FoundryClient {
    * FoundryVTT at all (#217). Unused in Socket.IO mode.
    */
   private restLinkLive = true;
+  /** Records every observed document/presence/module broadcast for `watch_events`. */
+  private readonly eventLog: WorldEventLog;
 
   constructor(config: FoundryClientConfig) {
     if (!config.baseUrl || config.baseUrl.trim() === '') {
@@ -464,6 +518,7 @@ export class FoundryClient {
       socketPath: '/socket.io/',
       ...config,
     };
+    this.eventLog = new WorldEventLog(config.eventBufferSize ?? 500);
 
     this.http = axios.create({
       baseURL: this.config.baseUrl,
@@ -662,6 +717,20 @@ export class FoundryClient {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+
+    // Recorded regardless of cache outcome — an uncached type (e.g. Setting)
+    // is still world activity a `watch_events` caller may be waiting on.
+    // Isolated in its own try/catch: a summarizer bug must never take the
+    // socket connection down.
+    try {
+      this.eventLog.append(summarizeDocumentBroadcast(broadcast, this.worldData));
+    } catch (error) {
+      logger.warn('Failed to record document broadcast to the event log', {
+        type: broadcast.type,
+        action: broadcast.action,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   };
 
   /**
@@ -691,6 +760,15 @@ export class FoundryClient {
       logger.debug(
         `User ${activity.userId} is now ${activity.active ? 'active' : 'inactive'} (userActivity)`,
       );
+      const name = this.worldData.users?.find((user) => user._id === activity.userId)?.name;
+      this.eventLog.append({
+        kind: 'presence',
+        type: '',
+        action: activity.active ? 'active' : 'inactive',
+        userId: activity.userId,
+        ids: [activity.userId],
+        summary: `👤 ${name ?? activity.userId} ${activity.active ? 'connected' : 'disconnected'}`,
+      });
     }
   };
 
@@ -824,6 +902,89 @@ export class FoundryClient {
    */
   hasWorldData(): boolean {
     return this.worldData !== null;
+  }
+
+  /**
+   * Records a bridge-pushed browser event (targeting, pings, …) into the
+   * world-event log, so `watch_events` sees canvas-only activity that never
+   * crosses the `modifyDocument` socket channel.
+   *
+   * An unrecognized `type` is dropped rather than thrown: a newer companion
+   * module pushing an event this server version does not model must never
+   * crash the connection.
+   */
+  recordModuleEvent(type: string, payload: Record<string, unknown>): void {
+    if (type === 'target_token') {
+      const tokenId = typeof payload.tokenId === 'string' ? payload.tokenId : undefined;
+      const userId = typeof payload.userId === 'string' ? payload.userId : undefined;
+      const userName = typeof payload.userName === 'string' ? payload.userName : undefined;
+      const tokenName = typeof payload.tokenName === 'string' ? payload.tokenName : undefined;
+      const sceneId = typeof payload.sceneId === 'string' ? payload.sceneId : undefined;
+      const targeted = payload.targeted === true;
+      this.eventLog.append({
+        kind: 'target',
+        type: '',
+        action: targeted ? 'target' : 'untarget',
+        ...(userId ? { userId } : {}),
+        ...(sceneId ? { sceneId } : {}),
+        ids: tokenId ? [tokenId] : [],
+        summary: `🎯 ${userName ?? userId ?? 'Someone'} ${targeted ? 'targeted' : 'un-targeted'} ${tokenName ?? tokenId ?? 'a token'}`,
+      });
+      return;
+    }
+    logger.debug(`Ignored unrecognized module-pushed event: ${type}`);
+  }
+
+  /**
+   * Reads world activity recorded since `cursor`, blocking up to `waitMs`
+   * when nothing has happened yet.
+   *
+   * A read-only entry point — no `assertWriteable()` — and the only way a
+   * handler reaches `eventLog`; the log itself stays private.
+   */
+  async watchEvents(params: {
+    cursor?: string;
+    waitMs?: number;
+    limit?: number;
+    kinds?: string[];
+    types?: string[];
+    actions?: string[];
+    sceneId?: string;
+    excludeSelf?: boolean;
+  }): Promise<EventReadResult & { cursorResolvedFrom: 'now' | 'oldest' | 'explicit' }> {
+    let from: number;
+    let cursorResolvedFrom: 'now' | 'oldest' | 'explicit';
+    const cursor = params.cursor ?? 'now';
+    if (cursor === 'now') {
+      from = this.eventLog.head();
+      cursorResolvedFrom = 'now';
+    } else if (cursor === 'oldest') {
+      from = Math.max(0, this.eventLog.oldest() - 1);
+      cursorResolvedFrom = 'oldest';
+    } else if (/^\d+$/.test(cursor)) {
+      from = Number.parseInt(cursor, 10);
+      cursorResolvedFrom = 'explicit';
+    } else {
+      throw new Error(`Invalid cursor: ${cursor}`);
+    }
+
+    const excludeUserId =
+      params.excludeSelf !== false && this.worldData ? this.worldData.userId : undefined;
+    const filter: EventFilter = {
+      ...(params.kinds ? { kinds: params.kinds } : {}),
+      ...(params.types ? { types: params.types } : {}),
+      ...(params.actions ? { actions: params.actions } : {}),
+      ...(params.sceneId ? { sceneId: params.sceneId } : {}),
+      ...(excludeUserId ? { excludeUserId } : {}),
+    };
+    const limit = params.limit ?? 50;
+
+    let result = this.eventLog.read(from, filter, limit);
+    if (result.events.length === 0 && (params.waitMs ?? 0) > 0) {
+      await this.eventLog.wait(from, params.waitMs ?? 0);
+      result = this.eventLog.read(from, filter, limit);
+    }
+    return { ...result, cursorResolvedFrom };
   }
 
   // ==========================================================================
@@ -1137,6 +1298,62 @@ export class FoundryClient {
     }
 
     return { actor, items, itemErrors };
+  }
+
+  /**
+   * Creates a new top-level Actor from a raw document (as returned by the
+   * module bridge's `get_compendium_document`) — the compendium→world import
+   * path `spawn_token` cannot take, since `spawn_token` requires an actor
+   * that already exists in the world.
+   *
+   * Cleaning keeps only `name`, `type`, `img`, `system`, `prototypeToken`,
+   * `flags`, and (unless `includeEmbedded` is false) `items`/`effects`;
+   * `_id`, `_stats`, and `sort` never survive a compendium copy, and the
+   * compendium's own filing is dropped in favor of `options.folder`.
+   *
+   * `includeEmbedded: false` is the fallback for a system that rejects an
+   * Actor create carrying embedded documents — the caller is then
+   * responsible for seeding `items` one at a time via {@link createActorItem}.
+   */
+  async createActorFromData(
+    data: Record<string, unknown>,
+    options: { name?: string; folder?: string; includeEmbedded?: boolean } = {},
+  ): Promise<WorldActor> {
+    this.assertWriteable();
+    if (options.folder !== undefined && !FOUNDRY_ID_PATTERN.test(options.folder)) {
+      throw new Error(`Invalid folder format: ${options.folder}`);
+    }
+
+    const cleaned: Record<string, unknown> = {};
+    for (const key of ['name', 'type', 'img', 'system', 'prototypeToken', 'flags'] as const) {
+      if (data[key] !== undefined) {
+        cleaned[key] = data[key];
+      }
+    }
+    if (options.includeEmbedded !== false) {
+      if (data.items !== undefined) {
+        cleaned.items = data.items;
+      }
+      if (data.effects !== undefined) {
+        cleaned.effects = data.effects;
+      }
+    }
+    if (options.name) {
+      cleaned.name = options.name;
+    }
+    if (options.folder) {
+      cleaned.folder = options.folder;
+    }
+
+    if (typeof cleaned.name !== 'string' || !cleaned.name) {
+      throw new Error('Compendium document has no usable name');
+    }
+    if (typeof cleaned.type !== 'string' || !cleaned.type) {
+      throw new Error('Compendium document has no usable type');
+    }
+
+    const result = await this.modifyDocument('Actor', 'create', { data: [cleaned] });
+    return result[0] as WorldActor;
   }
 
   // ==========================================================================
@@ -1656,7 +1873,9 @@ export class FoundryClient {
       throw new Error('patch is required and must contain at least one vision or light field');
     }
     if (patch.lightColor && !HEX_COLOR_PATTERN.test(patch.lightColor)) {
-      throw new Error(`Invalid lightColor format: ${patch.lightColor} — must be a 6-digit hex color`);
+      throw new Error(
+        `Invalid lightColor format: ${patch.lightColor} — must be a 6-digit hex color`,
+      );
     }
 
     const update: Record<string, unknown> = { _id: tokenId };
@@ -1672,7 +1891,8 @@ export class FoundryClient {
     if (patch.lightBright !== undefined) update['light.bright'] = patch.lightBright;
     if (patch.lightColor !== undefined) update['light.color'] = patch.lightColor;
     if (patch.lightAngle !== undefined) update['light.angle'] = patch.lightAngle;
-    if (patch.lightAnimationType !== undefined) update['light.animation.type'] = patch.lightAnimationType;
+    if (patch.lightAnimationType !== undefined)
+      update['light.animation.type'] = patch.lightAnimationType;
 
     const result = await this.modifyDocument('Token', 'update', {
       updates: [update],
@@ -1746,6 +1966,121 @@ export class FoundryClient {
       ids: [effectId],
       parentUuid: parentActorUuid,
     });
+  }
+
+  /**
+   * Creates a general-purpose `ActiveEffect` on a token's actor — mechanical
+   * buffs/debuffs with `changes`/`duration`, not just the name+`statuses`
+   * toggle {@link createActorStatusEffect} writes. Accepts the same
+   * parent-UUID forms.
+   *
+   * @param parentActorUuid - the token actor's parent UUID
+   * @param effect - effect fields; `name` is required
+   * @returns the newly created ActiveEffect document
+   */
+  async createActorEffect(parentActorUuid: string, effect: ActorEffectInput): Promise<WorldEffect> {
+    this.assertWriteable();
+    if (!TOKEN_ACTOR_UUID_PATTERN.test(parentActorUuid)) {
+      throw new Error(`Invalid actor UUID format: ${parentActorUuid}`);
+    }
+    if (!effect.name || typeof effect.name !== 'string') {
+      throw new Error('effect.name is required and must be a string');
+    }
+    const effectData: Record<string, unknown> = { name: effect.name };
+    if (effect.img) {
+      effectData.img = effect.img;
+    }
+    if (effect.description) {
+      effectData.description = effect.description;
+    }
+    if (effect.disabled !== undefined) {
+      effectData.disabled = effect.disabled;
+    }
+    if (effect.statuses) {
+      effectData.statuses = effect.statuses;
+    }
+    if (effect.duration) {
+      effectData.duration = effect.duration;
+    }
+    const changes = mapEffectChanges(effect.changes);
+    if (changes) {
+      effectData.changes = changes;
+    }
+    const result = await this.modifyDocument('ActiveEffect', 'create', {
+      data: [effectData],
+      parentUuid: parentActorUuid,
+    });
+    return result[0] as WorldEffect;
+  }
+
+  /**
+   * Updates a general-purpose `ActiveEffect` on a token's actor. Every field
+   * on `patch` is optional and replaces the corresponding field on the
+   * existing document; omitted fields are left as they are.
+   *
+   * @param parentActorUuid - the token actor's parent UUID
+   * @param effectId - 16-char alphanumeric ActiveEffect document id
+   * @param patch - fields to replace on the existing effect
+   */
+  async updateActorEffect(
+    parentActorUuid: string,
+    effectId: string,
+    patch: ActorEffectInput,
+  ): Promise<WorldEffect> {
+    this.assertWriteable();
+    if (!TOKEN_ACTOR_UUID_PATTERN.test(parentActorUuid)) {
+      throw new Error(`Invalid actor UUID format: ${parentActorUuid}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(effectId)) {
+      throw new Error(`Invalid effectId format: ${effectId}`);
+    }
+    const update: Record<string, unknown> = { _id: effectId };
+    if (patch.name !== undefined) {
+      update.name = patch.name;
+    }
+    if (patch.img !== undefined) {
+      update.img = patch.img;
+    }
+    if (patch.description !== undefined) {
+      update.description = patch.description;
+    }
+    if (patch.disabled !== undefined) {
+      update.disabled = patch.disabled;
+    }
+    if (patch.statuses !== undefined) {
+      update.statuses = patch.statuses;
+    }
+    if (patch.duration !== undefined) {
+      update.duration = patch.duration;
+    }
+    const changes = mapEffectChanges(patch.changes);
+    if (changes) {
+      update.changes = changes;
+    }
+    const result = await this.modifyDocument('ActiveEffect', 'update', {
+      updates: [update],
+      parentUuid: parentActorUuid,
+    });
+    return result[0] as WorldEffect;
+  }
+
+  /**
+   * Lists the `ActiveEffect`s cached on a world-linked actor. A cache read,
+   * not a socket round trip — and consequently only reaches a top-level
+   * `Actor` document (`worldData.actors`), not an unlinked token's synthetic
+   * per-token actor, which is never a `worldData.actors` entry of its own.
+   *
+   * @param actorId - 16-char alphanumeric actor document id
+   */
+  listActorEffects(actorId: string): WorldEffect[] {
+    if (!FOUNDRY_ID_PATTERN.test(actorId)) {
+      throw new Error(`Invalid actorId format: ${actorId}`);
+    }
+    const actor = this.worldData?.actors.find((candidate) => candidate._id === actorId);
+    if (!actor) {
+      throw new Error(`Actor not found: ${actorId}`);
+    }
+    return actor.effects ?? [];
   }
 
   // ==========================================================================
@@ -1867,6 +2202,40 @@ export class FoundryClient {
       users: this.worldData.users,
       activeUsers: this.worldData.activeUsers,
     };
+  }
+
+  /**
+   * Changes a user's role/permission level.
+   *
+   * Guarded against self-lockout: refuses to demote the connected MCP user
+   * below `assistant` (3), which would immediately revoke write access and
+   * break subsequent operations.
+   *
+   * @param userId - 16-char alphanumeric User document id
+   * @param role - named permission tier
+   */
+  async setUserRole(userId: string, role: keyof typeof USER_ROLES): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(userId)) {
+      throw new Error(`Invalid userId format: ${userId}`);
+    }
+    const numericRole = USER_ROLES[role];
+    if (numericRole === undefined) {
+      throw new Error(
+        `Invalid role "${role}": expected one of ${Object.keys(USER_ROLES).join(', ')}`,
+      );
+    }
+    if (userId === this.worldData?.userId && numericRole < USER_ROLES.assistant) {
+      throw new Error(
+        `Cannot demote the connected user (${userId}) below assistant role: self-demotion would lock the MCP server out of GM permissions.`,
+      );
+    }
+    const result = await this.modifyDocument('User', 'update', {
+      updates: [{ _id: userId, role: numericRole }],
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
   }
 
   // ==========================================================================
@@ -2155,6 +2524,63 @@ export class FoundryClient {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
     await this.modifyDocument('Scene', 'delete', { ids: [sceneId] });
+  }
+
+  /**
+   * Updates document ownership permissions for users.
+   *
+   * @param documentType - collection the document lives in
+   * @param documentId - 16-char alphanumeric document id
+   * @param entries - mapping of user IDs (or "default") to ownership levels
+   */
+  async setDocumentOwnership(
+    documentType: 'Actor' | 'Item' | 'Scene' | 'JournalEntry' | 'RollTable' | 'Macro',
+    documentId: string,
+    entries: Array<{ target: string; level: keyof typeof OWNERSHIP_LEVELS }>,
+  ): Promise<unknown> {
+    this.assertWriteable();
+    const VALID_DOC_TYPES = new Set([
+      'Actor',
+      'Item',
+      'Scene',
+      'JournalEntry',
+      'RollTable',
+      'Macro',
+    ]);
+    if (!VALID_DOC_TYPES.has(documentType)) {
+      throw new Error(
+        `Invalid documentType "${documentType}": expected one of ${Array.from(VALID_DOC_TYPES).join(', ')}`,
+      );
+    }
+    if (!FOUNDRY_ID_PATTERN.test(documentId)) {
+      throw new Error(`Invalid documentId format: ${documentId}`);
+    }
+    if (!Array.isArray(entries) || entries.length === 0) {
+      throw new Error('entries is required and must contain at least one ownership mapping');
+    }
+
+    const ownership: Record<string, number> = {};
+    for (const entry of entries) {
+      if (entry.target !== 'default' && !FOUNDRY_ID_PATTERN.test(entry.target)) {
+        throw new Error(
+          `Invalid ownership target "${entry.target}": must be a 16-char user id or "default"`,
+        );
+      }
+      const level = OWNERSHIP_LEVELS[entry.level];
+      if (level === undefined) {
+        throw new Error(
+          `Invalid ownership level "${entry.level}": expected one of ${Object.keys(OWNERSHIP_LEVELS).join(', ')}`,
+        );
+      }
+      ownership[entry.target] = level;
+    }
+
+    const result = await this.modifyDocument(documentType, 'update', {
+      updates: [{ _id: documentId, ownership }],
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
   }
 
   /**
@@ -2490,7 +2916,9 @@ export class FoundryClient {
       throw new Error('name is required and must be a string');
     }
     if (options.mode !== undefined && ![-1, 0, 1, 2].includes(options.mode)) {
-      throw new Error('Invalid playlist mode: must be -1 (disabled), 0 (sequential), 1 (shuffle), or 2 (simultaneous)');
+      throw new Error(
+        'Invalid playlist mode: must be -1 (disabled), 0 (sequential), 1 (shuffle), or 2 (simultaneous)',
+      );
     }
     if (options.channel && !['music', 'environment', 'interface'].includes(options.channel)) {
       throw new Error('Invalid audio channel: must be "music", "environment", or "interface"');
@@ -2548,7 +2976,8 @@ export class FoundryClient {
         throw new Error(`Invalid soundId format: ${options.soundId}`);
       }
       const playlist = this.worldData?.playlists.find((p) => p._id === playlistId);
-      const soundExists = Array.isArray(playlist?.sounds) &&
+      const soundExists =
+        Array.isArray(playlist?.sounds) &&
         (playlist?.sounds as Array<Record<string, unknown>>).some((s) => s._id === options.soundId);
       if (!soundExists) {
         throw new Error(`Sound not found on playlist: ${options.soundId}`);
@@ -2620,7 +3049,9 @@ export class FoundryClient {
     }
     const parts = key.split('.');
     if (parts.length < 2 || parts.some((p) => p.length === 0)) {
-      throw new Error(`Invalid setting key: "${key}" — must have format {scope}.{field} (e.g. "system-name.settingKey")`);
+      throw new Error(
+        `Invalid setting key: "${key}" — must have format {scope}.{field} (e.g. "system-name.settingKey")`,
+      );
     }
     if (parts[0] === 'core') {
       throw new Error(
@@ -2629,9 +3060,10 @@ export class FoundryClient {
     }
 
     const existing = this.worldData?.settings.find((s) => s.key === key);
-    let previous: unknown = undefined;
+    let previous: unknown;
     if (existing) {
-      const raw = typeof existing.value === 'string' ? existing.value : JSON.stringify(existing.value);
+      const raw =
+        typeof existing.value === 'string' ? existing.value : JSON.stringify(existing.value);
       try {
         previous = JSON.parse(raw);
       } catch {
@@ -2753,6 +3185,29 @@ export class FoundryClient {
     }
     const result = await this.modifyDocument('Scene', 'update', {
       updates: [update],
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
+  }
+
+  /**
+   * Updates a scene's weather effect (e.g. "rain", "snow", "leaves",
+   * "rainStorm", "fog"), or clears it when passed `''`.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param weather - weather effect key string, or empty string to clear
+   */
+  async setSceneWeather(sceneId: string, weather: string): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (typeof weather !== 'string') {
+      throw new Error('weather is required and must be a string');
+    }
+    const result = await this.modifyDocument('Scene', 'update', {
+      updates: [{ _id: sceneId, weather }],
       diff: true,
       recursive: true,
     });
@@ -3626,7 +4081,9 @@ export class FoundryClient {
     }
 
     if (options.color && !HEX_COLOR_PATTERN.test(options.color)) {
-      throw new Error(`Invalid color format: ${options.color} — must be a 6-digit hex color (e.g. #ff8800)`);
+      throw new Error(
+        `Invalid color format: ${options.color} — must be a 6-digit hex color (e.g. #ff8800)`,
+      );
     }
 
     const lightConfig: Record<string, unknown> = {
@@ -3686,7 +4143,9 @@ export class FoundryClient {
       throw new Error(`Invalid lightId format: ${lightId}`);
     }
     if (patch.color && !HEX_COLOR_PATTERN.test(patch.color)) {
-      throw new Error(`Invalid color format: ${patch.color} — must be a 6-digit hex color (e.g. #ff8800)`);
+      throw new Error(
+        `Invalid color format: ${patch.color} — must be a 6-digit hex color (e.g. #ff8800)`,
+      );
     }
 
     const update: Record<string, unknown> = { _id: lightId };
@@ -3882,7 +4341,9 @@ export class FoundryClient {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
     if (!options.entryId && !options.text) {
-      throw new Error('A note needs entryId (a journal entry to link) or text (a standalone label), or both');
+      throw new Error(
+        'A note needs entryId (a journal entry to link) or text (a standalone label), or both',
+      );
     }
     if (options.entryId) {
       if (!FOUNDRY_ID_PATTERN.test(options.entryId)) {
@@ -4014,7 +4475,12 @@ export class FoundryClient {
     if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
-    if (typeof options.x !== 'number' || !Number.isFinite(options.x) || typeof options.y !== 'number' || !Number.isFinite(options.y)) {
+    if (
+      typeof options.x !== 'number' ||
+      !Number.isFinite(options.x) ||
+      typeof options.y !== 'number' ||
+      !Number.isFinite(options.y)
+    ) {
       throw new Error(`Invalid coordinates: (${options.x}, ${options.y}) — must be finite numbers`);
     }
 
@@ -4033,19 +4499,31 @@ export class FoundryClient {
       }
       shapeData.radius = options.radius;
     } else if (shapeType === 'p') {
-      if (!Array.isArray(options.points) || options.points.length < 6 || options.points.length % 2 !== 0) {
-        throw new Error('points array with at least 6 coordinates (3 vertex pairs) is required for polygon shape');
+      if (
+        !Array.isArray(options.points) ||
+        options.points.length < 6 ||
+        options.points.length % 2 !== 0
+      ) {
+        throw new Error(
+          'points array with at least 6 coordinates (3 vertex pairs) is required for polygon shape',
+        );
       }
       shapeData.points = options.points;
     } else {
-      throw new Error(`Invalid shape type: ${shapeType} — must be r (rectangle), c (circle), e (ellipse), or p (polygon)`);
+      throw new Error(
+        `Invalid shape type: ${shapeType} — must be r (rectangle), c (circle), e (ellipse), or p (polygon)`,
+      );
     }
 
     if (options.strokeColor && !HEX_COLOR_PATTERN.test(options.strokeColor)) {
-      throw new Error(`Invalid strokeColor format: ${options.strokeColor} — must be a 6-digit hex color`);
+      throw new Error(
+        `Invalid strokeColor format: ${options.strokeColor} — must be a 6-digit hex color`,
+      );
     }
     if (options.fillColor && !HEX_COLOR_PATTERN.test(options.fillColor)) {
-      throw new Error(`Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`);
+      throw new Error(
+        `Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`,
+      );
     }
 
     let fillType = options.fillType ?? 0;
@@ -4143,7 +4621,11 @@ export class FoundryClient {
     if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
       throw new Error(`Invalid sceneId format: ${sceneId}`);
     }
-    if (typeof options.distance !== 'number' || !Number.isFinite(options.distance) || options.distance < 0) {
+    if (
+      typeof options.distance !== 'number' ||
+      !Number.isFinite(options.distance) ||
+      options.distance < 0
+    ) {
       throw new Error('distance is required and must be a finite non-negative number');
     }
     const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
@@ -4185,10 +4667,14 @@ export class FoundryClient {
     }
 
     if (options.borderColor && !HEX_COLOR_PATTERN.test(options.borderColor)) {
-      throw new Error(`Invalid borderColor format: ${options.borderColor} — must be a 6-digit hex color`);
+      throw new Error(
+        `Invalid borderColor format: ${options.borderColor} — must be a 6-digit hex color`,
+      );
     }
     if (options.fillColor && !HEX_COLOR_PATTERN.test(options.fillColor)) {
-      throw new Error(`Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`);
+      throw new Error(
+        `Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`,
+      );
     }
 
     const data: Record<string, unknown> = {
@@ -4222,6 +4708,143 @@ export class FoundryClient {
     }
     await this.modifyDocument('MeasuredTemplate', 'delete', {
       ids: [templateId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
+  // Region methods (FoundryVTT v12+)
+  // ==========================================================================
+
+  listRegions(sceneId: string): SceneRegion[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const regions = Array.isArray(scene.regions) ? scene.regions : [];
+    return regions.map((r) => {
+      const rec = r as Record<string, unknown>;
+      const elev = isRecord(rec.elevation) ? (rec.elevation as Record<string, unknown>) : {};
+      const shapes = Array.isArray(rec.shapes) ? rec.shapes : [];
+      const behaviors = Array.isArray(rec.behaviors) ? rec.behaviors : [];
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        name: typeof rec.name === 'string' ? rec.name : '',
+        color: typeof rec.color === 'string' ? rec.color : null,
+        elevation: {
+          bottom: typeof elev.bottom === 'number' ? elev.bottom : null,
+          top: typeof elev.top === 'number' ? elev.top : null,
+        },
+        shapesCount: shapes.length,
+        behaviorsCount: behaviors.length,
+      };
+    });
+  }
+
+  async createRegion(
+    sceneId: string,
+    options: {
+      name: string;
+      color?: string;
+      visibility?: number;
+      elevation?: { bottom?: number; top?: number };
+      shapes?: Array<
+        | { type: 'rectangle'; x: number; y: number; width: number; height: number }
+        | { type: 'circle'; x: number; y: number; radius: number }
+        | { type: 'polygon'; points: number[] }
+      >;
+      behaviors?: Array<{ type: string; system?: Record<string, unknown>; disabled?: boolean }>;
+    },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!options.name || typeof options.name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (options.color && !HEX_COLOR_PATTERN.test(options.color)) {
+      throw new Error(
+        `Invalid color format: ${options.color} — must be a 6-digit hex color (e.g. #ff8800)`,
+      );
+    }
+
+    const mappedShapes: Array<Record<string, unknown>> = [];
+    if (options.shapes) {
+      for (const shape of options.shapes) {
+        if (shape.type === 'rectangle') {
+          if (
+            !Number.isFinite(shape.x) ||
+            !Number.isFinite(shape.y) ||
+            !Number.isFinite(shape.width) ||
+            !Number.isFinite(shape.height)
+          ) {
+            throw new Error('rectangle shape requires finite x, y, width, height');
+          }
+          mappedShapes.push({
+            type: 'rectangle',
+            x: shape.x,
+            y: shape.y,
+            width: shape.width,
+            height: shape.height,
+          });
+        } else if (shape.type === 'circle') {
+          if (
+            !Number.isFinite(shape.x) ||
+            !Number.isFinite(shape.y) ||
+            !Number.isFinite(shape.radius) ||
+            shape.radius <= 0
+          ) {
+            throw new Error('circle shape requires finite x, y and positive radius');
+          }
+          mappedShapes.push({
+            type: 'circle',
+            x: shape.x,
+            y: shape.y,
+            radius: shape.radius,
+          });
+        } else if (shape.type === 'polygon') {
+          if (
+            !Array.isArray(shape.points) ||
+            shape.points.length < 6 ||
+            shape.points.length % 2 !== 0
+          ) {
+            throw new Error('polygon shape requires points array with at least 3 (x, y) pairs');
+          }
+          mappedShapes.push({ type: 'polygon', points: shape.points });
+        }
+      }
+    }
+
+    const regionData: Record<string, unknown> = {
+      name: options.name,
+      shapes: mappedShapes,
+    };
+    if (options.color) regionData.color = options.color;
+    if (options.visibility !== undefined) regionData.visibility = options.visibility;
+    if (options.elevation) regionData.elevation = options.elevation;
+    if (options.behaviors) regionData.behaviors = options.behaviors;
+
+    const result = await this.modifyDocument('Region', 'create', {
+      data: [regionData],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async deleteRegion(sceneId: string, regionId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(regionId)) {
+      throw new Error(`Invalid regionId format: ${regionId}`);
+    }
+    await this.modifyDocument('Region', 'delete', {
+      ids: [regionId],
       parentUuid: `Scene.${sceneId}`,
     });
   }
@@ -4917,13 +5540,6 @@ function worldSceneToFoundry(s: WorldScene): FoundryScene {
     scene.description = desc;
   }
   return scene;
-}
-
-/**
- * Safely extracts a nested value from a Record tree.
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 /**

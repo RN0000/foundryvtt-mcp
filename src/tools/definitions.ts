@@ -612,6 +612,27 @@ export const sceneMutationTools = [
       },
     },
   },
+  {
+    name: 'set_scene_weather',
+    description:
+      'Set or clear weather effects on a scene (e.g. "rain", "snow", "leaves", "rainStorm", "fog", or empty string "" to clear). Default values come from Foundry core; additional effects may be available if weather modules are installed. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        weather: {
+          type: 'string',
+          description:
+            'Weather effect key (e.g. "rain", "snow", "leaves", "rainStorm", "fog"), or "" to clear',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+      required: ['weather'],
+    },
+  },
 ];
 
 /**
@@ -999,17 +1020,59 @@ export const placeableMutationTools = [
         y: { type: 'number', description: 'Pixel y coordinate (center)' },
         gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
         gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
-        dim: { type: 'number', description: 'Dim light radius in grid units (default 0)', default: 0 },
-        bright: { type: 'number', description: 'Bright light radius in grid units (default 0)', default: 0 },
-        color: { type: 'string', description: 'Light color as a 6-digit hex string (e.g. "#ff8800")' },
-        angle: { type: 'number', description: 'Light emission angle in degrees (default 360)', default: 360 },
-        rotation: { type: 'number', description: 'Light rotation in degrees (default 0)', default: 0 },
-        animationType: { type: 'string', description: 'Optional animation type (e.g. "torch", "pulse", "chroma", "wave")' },
-        animationSpeed: { type: 'number', description: 'Animation speed 0-10 (default 5)', default: 5 },
-        animationIntensity: { type: 'number', description: 'Animation intensity 1-10 (default 5)', default: 5 },
-        walls: { type: 'boolean', description: 'Whether light is constrained by walls (default true)', default: true },
-        vision: { type: 'boolean', description: 'Whether this light provides vision to tokens (default false)', default: false },
-        hidden: { type: 'boolean', description: 'Whether the light source is hidden (default false)', default: false },
+        dim: {
+          type: 'number',
+          description: 'Dim light radius in grid units (default 0)',
+          default: 0,
+        },
+        bright: {
+          type: 'number',
+          description: 'Bright light radius in grid units (default 0)',
+          default: 0,
+        },
+        color: {
+          type: 'string',
+          description: 'Light color as a 6-digit hex string (e.g. "#ff8800")',
+        },
+        angle: {
+          type: 'number',
+          description: 'Light emission angle in degrees (default 360)',
+          default: 360,
+        },
+        rotation: {
+          type: 'number',
+          description: 'Light rotation in degrees (default 0)',
+          default: 0,
+        },
+        animationType: {
+          type: 'string',
+          description: 'Optional animation type (e.g. "torch", "pulse", "chroma", "wave")',
+        },
+        animationSpeed: {
+          type: 'number',
+          description: 'Animation speed 0-10 (default 5)',
+          default: 5,
+        },
+        animationIntensity: {
+          type: 'number',
+          description: 'Animation intensity 1-10 (default 5)',
+          default: 5,
+        },
+        walls: {
+          type: 'boolean',
+          description: 'Whether light is constrained by walls (default true)',
+          default: true,
+        },
+        vision: {
+          type: 'boolean',
+          description: 'Whether this light provides vision to tokens (default false)',
+          default: false,
+        },
+        hidden: {
+          type: 'boolean',
+          description: 'Whether the light source is hidden (default false)',
+          default: false,
+        },
       },
     },
   },
@@ -1027,7 +1090,10 @@ export const placeableMutationTools = [
         y: { type: 'number', description: 'New pixel y coordinate' },
         dim: { type: 'number', description: 'Dim light radius in grid units' },
         bright: { type: 'number', description: 'Bright light radius in grid units' },
-        color: { type: 'string', description: 'Light color as a 6-digit hex string (e.g. "#ff8800")' },
+        color: {
+          type: 'string',
+          description: 'Light color as a 6-digit hex string (e.g. "#ff8800")',
+        },
         angle: { type: 'number', description: 'Light emission angle in degrees' },
         rotation: { type: 'number', description: 'Light rotation in degrees' },
         walls: { type: 'boolean', description: 'Whether light is constrained by walls' },
@@ -1040,10 +1106,7 @@ export const placeableMutationTools = [
   {
     name: 'delete_light',
     description:
-      'Permanently remove an AmbientLight from a scene. ' +
-      CONFIRM_FIRST +
-      ' ' +
-      WRITE_GATE,
+      'Permanently remove an AmbientLight from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1067,12 +1130,36 @@ export const placeableMutationTools = [
         y: { type: 'number', description: 'Pixel y coordinate (center)' },
         gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
         gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
-        radius: { type: 'number', description: 'Audible radius in grid units (default 0)', default: 0 },
-        volume: { type: 'number', description: 'Playback volume 0.0 to 1.0 (default 0.5)', default: 0.5 },
-        repeat: { type: 'boolean', description: 'Whether the audio loops continuously (default false)', default: false },
-        walls: { type: 'boolean', description: 'Whether sound is blocked by walls (default true)', default: true },
-        easing: { type: 'boolean', description: 'Whether volume fades towards the boundary (default true)', default: true },
-        hidden: { type: 'boolean', description: 'Whether the sound is hidden/disabled (default false)', default: false },
+        radius: {
+          type: 'number',
+          description: 'Audible radius in grid units (default 0)',
+          default: 0,
+        },
+        volume: {
+          type: 'number',
+          description: 'Playback volume 0.0 to 1.0 (default 0.5)',
+          default: 0.5,
+        },
+        repeat: {
+          type: 'boolean',
+          description: 'Whether the audio loops continuously (default false)',
+          default: false,
+        },
+        walls: {
+          type: 'boolean',
+          description: 'Whether sound is blocked by walls (default true)',
+          default: true,
+        },
+        easing: {
+          type: 'boolean',
+          description: 'Whether volume fades towards the boundary (default true)',
+          default: true,
+        },
+        hidden: {
+          type: 'boolean',
+          description: 'Whether the sound is hidden/disabled (default false)',
+          default: false,
+        },
       },
       required: ['path'],
     },
@@ -1080,10 +1167,7 @@ export const placeableMutationTools = [
   {
     name: 'delete_sound',
     description:
-      'Permanently remove an AmbientSound from a scene. ' +
-      CONFIRM_FIRST +
-      ' ' +
-      WRITE_GATE,
+      'Permanently remove an AmbientSound from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1102,17 +1186,40 @@ export const placeableMutationTools = [
       type: 'object',
       properties: {
         sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
-        entryId: { type: 'string', description: 'Optional JournalEntry document ID to link to this pin' },
-        pageId: { type: 'string', description: 'Optional JournalEntryPage ID within the linked entry' },
+        entryId: {
+          type: 'string',
+          description: 'Optional JournalEntry document ID to link to this pin',
+        },
+        pageId: {
+          type: 'string',
+          description: 'Optional JournalEntryPage ID within the linked entry',
+        },
         text: { type: 'string', description: 'Optional label text displayed below or on the pin' },
         x: { type: 'number', description: 'Pixel x coordinate (center)' },
         y: { type: 'number', description: 'Pixel y coordinate (center)' },
         gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
         gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
-        iconSize: { type: 'number', description: 'Pin icon size in pixels (minimum 32, default 40)', default: 40 },
-        fontSize: { type: 'number', description: 'Label font size in pixels (8-128, default 32)', default: 32 },
-        textAnchor: { type: 'number', description: 'Text anchor point: 0 (center), 1 (bottom/default), 2 (top), 3 (left), 4 (right)', default: 1 },
-        global: { type: 'boolean', description: 'Whether the note is visible regardless of fog/vision (default false)', default: false },
+        iconSize: {
+          type: 'number',
+          description: 'Pin icon size in pixels (minimum 32, default 40)',
+          default: 40,
+        },
+        fontSize: {
+          type: 'number',
+          description: 'Label font size in pixels (8-128, default 32)',
+          default: 32,
+        },
+        textAnchor: {
+          type: 'number',
+          description:
+            'Text anchor point: 0 (center), 1 (bottom/default), 2 (top), 3 (left), 4 (right)',
+          default: 1,
+        },
+        global: {
+          type: 'boolean',
+          description: 'Whether the note is visible regardless of fog/vision (default false)',
+          default: false,
+        },
       },
     },
   },
@@ -1142,33 +1249,70 @@ export const placeableMutationTools = [
       properties: {
         x: { type: 'number', description: 'Pixel x coordinate (top-left)' },
         y: { type: 'number', description: 'Pixel y coordinate (top-left)' },
-        shape: { type: 'string', enum: ['r', 'c', 'e', 'p'], description: 'Shape type: "r" (rectangle, default), "c" (circle), "e" (ellipse), "p" (polygon)', default: 'r' },
+        shape: {
+          type: 'string',
+          enum: ['r', 'c', 'e', 'p'],
+          description:
+            'Shape type: "r" (rectangle, default), "c" (circle), "e" (ellipse), "p" (polygon)',
+          default: 'r',
+        },
         sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
         width: { type: 'number', description: 'Width in pixels (required for "r" and "e")' },
         height: { type: 'number', description: 'Height in pixels (required for "r" and "e")' },
         radius: { type: 'number', description: 'Radius in pixels (required for "c")' },
-        points: { type: 'array', items: { type: 'number' }, description: 'Array of coordinates [x1, y1, x2, y2, ...] with at least 3 points (required for "p")' },
+        points: {
+          type: 'array',
+          items: { type: 'number' },
+          description:
+            'Array of coordinates [x1, y1, x2, y2, ...] with at least 3 points (required for "p")',
+        },
         rotation: { type: 'number', description: 'Rotation in degrees (default 0)', default: 0 },
-        strokeColor: { type: 'string', description: 'Stroke color as a 6-digit hex string (e.g. "#ffffff")' },
-        strokeWidth: { type: 'number', description: 'Stroke line width in pixels (default 8)', default: 8 },
-        fillType: { type: 'number', enum: [0, 1, 2], description: 'Fill type: 0 (none), 1 (solid), 2 (pattern)' },
-        fillColor: { type: 'string', description: 'Fill color as a 6-digit hex string (e.g. "#336699")' },
-        fillAlpha: { type: 'number', description: 'Fill opacity 0.0 to 1.0 (default 0.5)', default: 0.5 },
+        strokeColor: {
+          type: 'string',
+          description: 'Stroke color as a 6-digit hex string (e.g. "#ffffff")',
+        },
+        strokeWidth: {
+          type: 'number',
+          description: 'Stroke line width in pixels (default 8)',
+          default: 8,
+        },
+        fillType: {
+          type: 'number',
+          enum: [0, 1, 2],
+          description: 'Fill type: 0 (none), 1 (solid), 2 (pattern)',
+        },
+        fillColor: {
+          type: 'string',
+          description: 'Fill color as a 6-digit hex string (e.g. "#336699")',
+        },
+        fillAlpha: {
+          type: 'number',
+          description: 'Fill opacity 0.0 to 1.0 (default 0.5)',
+          default: 0.5,
+        },
         text: { type: 'string', description: 'Optional text label displayed inside the drawing' },
-        fontSize: { type: 'number', description: 'Font size in pixels (8-256, default 48)', default: 48 },
-        hidden: { type: 'boolean', description: 'Whether the drawing is hidden from players (default false)', default: false },
-        locked: { type: 'boolean', description: 'Whether the drawing is locked from interaction (default false)', default: false },
+        fontSize: {
+          type: 'number',
+          description: 'Font size in pixels (8-256, default 48)',
+          default: 48,
+        },
+        hidden: {
+          type: 'boolean',
+          description: 'Whether the drawing is hidden from players (default false)',
+          default: false,
+        },
+        locked: {
+          type: 'boolean',
+          description: 'Whether the drawing is locked from interaction (default false)',
+          default: false,
+        },
       },
       required: ['x', 'y'],
     },
   },
   {
     name: 'delete_drawing',
-    description:
-      'Permanently remove a Drawing from a scene. ' +
-      CONFIRM_FIRST +
-      ' ' +
-      WRITE_GATE,
+    description: 'Permanently remove a Drawing from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1186,19 +1330,44 @@ export const placeableMutationTools = [
     inputSchema: {
       type: 'object',
       properties: {
-        distance: { type: 'number', description: 'Effect distance/radius in grid units (e.g. 6m or 30ft)' },
-        t: { type: 'string', enum: ['circle', 'cone', 'rect', 'ray'], description: 'Template type (default "circle")', default: 'circle' },
+        distance: {
+          type: 'number',
+          description: 'Effect distance/radius in grid units (e.g. 6m or 30ft)',
+        },
+        t: {
+          type: 'string',
+          enum: ['circle', 'cone', 'rect', 'ray'],
+          description: 'Template type (default "circle")',
+          default: 'circle',
+        },
         sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
         x: { type: 'number', description: 'Pixel x coordinate (origin point)' },
         y: { type: 'number', description: 'Pixel y coordinate (origin point)' },
         gridCol: { type: 'number', description: 'Grid column (centers origin in cell)' },
         gridRow: { type: 'number', description: 'Grid row (centers origin in cell)' },
-        direction: { type: 'number', description: 'Direction angle in degrees (0 = right, 90 = down; required for cone/ray/rect)', default: 0 },
-        angle: { type: 'number', description: 'Cone spread angle in degrees (required for cone, e.g. 45 or 53.13)', default: 0 },
-        width: { type: 'number', description: 'Ray line width in grid units (required for ray)', default: 0 },
+        direction: {
+          type: 'number',
+          description:
+            'Direction angle in degrees (0 = right, 90 = down; required for cone/ray/rect)',
+          default: 0,
+        },
+        angle: {
+          type: 'number',
+          description: 'Cone spread angle in degrees (required for cone, e.g. 45 or 53.13)',
+          default: 0,
+        },
+        width: {
+          type: 'number',
+          description: 'Ray line width in grid units (required for ray)',
+          default: 0,
+        },
         borderColor: { type: 'string', description: 'Border color as a 6-digit hex string' },
         fillColor: { type: 'string', description: 'Fill color as a 6-digit hex string' },
-        hidden: { type: 'boolean', description: 'Whether the template is hidden from players (default false)', default: false },
+        hidden: {
+          type: 'boolean',
+          description: 'Whether the template is hidden from players (default false)',
+          default: false,
+        },
       },
       required: ['distance'],
     },
@@ -1361,7 +1530,8 @@ export const diagnosticsTools = [
       properties: {
         category: {
           type: 'string',
-          description: 'Optional error category to filter summary and logs (e.g. "socket", "database")',
+          description:
+            'Optional error category to filter summary and logs (e.g. "socket", "database")',
         },
         timeframe: {
           type: 'number',
@@ -1725,7 +1895,8 @@ export const tokenMutationTools = [
         },
         sightEnabled: {
           type: 'boolean',
-          description: 'Whether vision is enabled for this token (automatically set true if sightRange > 0)',
+          description:
+            'Whether vision is enabled for this token (automatically set true if sightRange > 0)',
         },
         sightRange: {
           type: 'number',
@@ -1839,6 +2010,26 @@ export const userTools = [
     inputSchema: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'set_user_role',
+    description:
+      'Change a user\'s permission role ("none", "player", "trusted", "assistant", "gamemaster"). Refuses self-demotion of the connected MCP user below assistant (3) to prevent accidental GM lockout. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: '16-char alphanumeric User document id' },
+        role: {
+          type: 'string',
+          enum: ['none', 'player', 'trusted', 'assistant', 'gamemaster'],
+          description: 'New role level for the user',
+        },
+      },
+      required: ['userId', 'role'],
     },
   },
 ];
@@ -2054,9 +2245,20 @@ export const worldDocumentMutationTools = [
           description:
             'Document type this folder contains: "Actor", "Item", "Scene", "JournalEntry", "Playlist", "RollTable", "Cards", "Macro", or "Compendium"',
         },
-        parent: { type: 'string', description: 'Optional parent Folder ID for nested folder hierarchies' },
-        color: { type: 'string', description: 'Optional folder color as a 6-digit hex string (e.g. "#ff0000")' },
-        sorting: { type: 'string', enum: ['a', 'm'], description: 'Sorting mode: "a" (alphabetical, default) or "m" (manual)', default: 'a' },
+        parent: {
+          type: 'string',
+          description: 'Optional parent Folder ID for nested folder hierarchies',
+        },
+        color: {
+          type: 'string',
+          description: 'Optional folder color as a 6-digit hex string (e.g. "#ff0000")',
+        },
+        sorting: {
+          type: 'string',
+          enum: ['a', 'm'],
+          description: 'Sorting mode: "a" (alphabetical, default) or "m" (manual)',
+          default: 'a',
+        },
       },
       required: ['name', 'type'],
     },
@@ -2070,11 +2272,20 @@ export const worldDocumentMutationTools = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Macro display name' },
-        type: { type: 'string', enum: ['script', 'chat'], description: 'Macro type: "script" (JavaScript) or "chat" (chat command)' },
+        type: {
+          type: 'string',
+          enum: ['script', 'chat'],
+          description: 'Macro type: "script" (JavaScript) or "chat" (chat command)',
+        },
         command: { type: 'string', description: 'Macro command content/script body' },
         folder: { type: 'string', description: 'Optional Folder ID to file the macro under' },
         img: { type: 'string', description: 'Optional icon image path' },
-        scope: { type: 'string', enum: ['global', 'actors', 'actor'], description: 'Macro execution scope (default "global")', default: 'global' },
+        scope: {
+          type: 'string',
+          enum: ['global', 'actors', 'actor'],
+          description: 'Macro execution scope (default "global")',
+          default: 'global',
+        },
       },
       required: ['name', 'type', 'command'],
     },
@@ -2082,10 +2293,7 @@ export const worldDocumentMutationTools = [
   {
     name: 'delete_macro',
     description:
-      'Permanently delete a Macro document from the world. ' +
-      CONFIRM_FIRST +
-      ' ' +
-      WRITE_GATE,
+      'Permanently delete a Macro document from the world. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2097,8 +2305,7 @@ export const worldDocumentMutationTools = [
   {
     name: 'create_playlist',
     description:
-      'Create a new audio Playlist document with optional starting sound tracks. ' +
-      WRITE_GATE,
+      'Create a new audio Playlist document with optional starting sound tracks. ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2107,7 +2314,8 @@ export const worldDocumentMutationTools = [
         mode: {
           type: 'number',
           enum: [-1, 0, 1, 2],
-          description: 'Playback mode: -1 (soundboard/disabled), 0 (sequential/default), 1 (shuffle), 2 (simultaneous)',
+          description:
+            'Playback mode: -1 (soundboard/disabled), 0 (sequential/default), 1 (shuffle), 2 (simultaneous)',
           default: 0,
         },
         channel: {
@@ -2125,9 +2333,20 @@ export const worldDocumentMutationTools = [
             type: 'object',
             properties: {
               name: { type: 'string', description: 'Track display name' },
-              path: { type: 'string', description: 'Audio file path (e.g. "assets/audio/bgm.mp3")' },
-              volume: { type: 'number', description: 'Track volume 0.0 to 1.0 (default 0.5)', default: 0.5 },
-              repeat: { type: 'boolean', description: 'Whether the track loops (default false)', default: false },
+              path: {
+                type: 'string',
+                description: 'Audio file path (e.g. "assets/audio/bgm.mp3")',
+              },
+              volume: {
+                type: 'number',
+                description: 'Track volume 0.0 to 1.0 (default 0.5)',
+                default: 0.5,
+              },
+              repeat: {
+                type: 'boolean',
+                description: 'Whether the track loops (default false)',
+                default: false,
+              },
             },
             required: ['name', 'path'],
           },
@@ -2146,7 +2365,11 @@ export const worldDocumentMutationTools = [
       properties: {
         playlistId: { type: 'string', description: 'The ID of the playlist to control' },
         playing: { type: 'boolean', description: 'true to start playback, false to stop' },
-        soundId: { type: 'string', description: 'Optional PlaylistSound ID to control a specific track instead of the entire playlist' },
+        soundId: {
+          type: 'string',
+          description:
+            'Optional PlaylistSound ID to control a specific track instead of the entire playlist',
+        },
       },
       required: ['playlistId', 'playing'],
     },
@@ -2166,8 +2389,45 @@ export const worldDocumentMutationTools = [
       required: ['playlistId'],
     },
   },
+  {
+    name: 'set_document_ownership',
+    description:
+      'Configure granular ownership permissions for a document. entries maps user IDs (or "default" for all players) to permission levels: "none" (0), "limited" (1), "observer" (2), "owner" (3). Document types supported: Actor, Item, Scene, JournalEntry, RollTable, Macro. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        documentType: {
+          type: 'string',
+          enum: ['Actor', 'Item', 'Scene', 'JournalEntry', 'RollTable', 'Macro'],
+          description: 'Document collection the target lives in',
+        },
+        documentId: { type: 'string', description: '16-char alphanumeric document id' },
+        entries: {
+          type: 'array',
+          description: 'List of target and ownership level mappings',
+          items: {
+            type: 'object',
+            properties: {
+              target: {
+                type: 'string',
+                description: '16-char User ID, or "default" for all players',
+              },
+              level: {
+                type: 'string',
+                enum: ['none', 'limited', 'observer', 'owner'],
+                description: 'Permission level to grant',
+              },
+            },
+            required: ['target', 'level'],
+          },
+          minItems: 1,
+        },
+      },
+      required: ['documentType', 'documentId', 'entries'],
+    },
+  },
 ];
-
 
 /**
  * Roll table tool definitions
@@ -2220,7 +2480,8 @@ export const rollTableTools = [
               range: {
                 type: 'array',
                 items: { type: 'number' },
-                description: 'Optional roll range [low, high] (e.g. [1, 2]). Auto-assigned if omitted on all results.',
+                description:
+                  'Optional roll range [low, high] (e.g. [1, 2]). Auto-assigned if omitted on all results.',
               },
             },
             required: ['text'],
@@ -2228,9 +2489,20 @@ export const rollTableTools = [
           minItems: 1,
         },
         description: { type: 'string', description: 'Optional table description' },
-        formula: { type: 'string', description: 'Optional custom dice formula (e.g. "1d100" or "2d6")' },
-        replacement: { type: 'boolean', description: 'Whether drawn results are replaced (default true)', default: true },
-        displayRoll: { type: 'boolean', description: 'Whether the roll total is displayed in chat (default true)', default: true },
+        formula: {
+          type: 'string',
+          description: 'Optional custom dice formula (e.g. "1d100" or "2d6")',
+        },
+        replacement: {
+          type: 'boolean',
+          description: 'Whether drawn results are replaced (default true)',
+          default: true,
+        },
+        displayRoll: {
+          type: 'boolean',
+          description: 'Whether the roll total is displayed in chat (default true)',
+          default: true,
+        },
         folder: { type: 'string', description: 'Optional Folder ID to file the table under' },
       },
       required: ['name', 'results'],
@@ -2239,10 +2511,7 @@ export const rollTableTools = [
   {
     name: 'delete_roll_table',
     description:
-      'Permanently delete a RollTable document from the world. ' +
-      CONFIRM_FIRST +
-      ' ' +
-      WRITE_GATE,
+      'Permanently delete a RollTable document from the world. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2287,7 +2556,8 @@ export const settingsTools = [
           description: 'The namespaced setting key in the format {scope}.{field} (non-core only)',
         },
         value: {
-          description: 'The value to store (JSON-serializable: string, number, boolean, object, or array)',
+          description:
+            'The value to store (JSON-serializable: string, number, boolean, object, or array)',
         },
       },
       required: ['key', 'value'],
@@ -2347,7 +2617,8 @@ export const moduleBridgeTools = [
         },
         packType: {
           type: 'string',
-          description: 'Optional document type to restrict search to (default "JournalEntry", e.g. "Item", "Actor")',
+          description:
+            'Optional document type to restrict search to (default "JournalEntry", e.g. "Item", "Actor")',
           default: 'JournalEntry',
         },
         limit: {
@@ -2392,6 +2663,486 @@ export const moduleBridgeTools = [
       required: ['formula'],
     },
   },
+  {
+    name: 'import_compendium_actor',
+    description:
+      'Import a compendium Actor (with its embedded items and effects) as a new top-level world Actor - the gap spawn_token cannot close alone, since it requires an actor that already exists in the world. Best-effort on embedded items: if the game system rejects embedded documents on create, the actor is recreated without them and each item is seeded individually, reporting per-item failures rather than losing the whole import. Requires the companion Foundry module. Use when: adding a monster or NPC from a compendium to the world before spawning its token. Do not use when: the actor already exists in the world - use spawn_token directly.' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        compendiumId: {
+          type: 'string',
+          description: 'Compendium pack id the actor lives in (e.g. "dnd5e.monsters")',
+        },
+        actorId: {
+          type: 'string',
+          description: "The compendium document's own id, as returned by search_compendium_content",
+        },
+        folderId: {
+          type: 'string',
+          description: 'Optional 16-char Folder document id to file the new world actor under',
+        },
+        name: {
+          type: 'string',
+          description: 'Optional rename for the world actor (default: the compendium name)',
+        },
+      },
+      required: ['compendiumId', 'actorId'],
+    },
+  },
+  {
+    name: 'set_target',
+    description:
+      "Set or clear this GM user's target selection on the active canvas (renders the targeting reticle in connected player browsers). tokenIds are token document IDs on the currently viewed scene. Requires the companion Foundry module. Use when: directing player attention, declaring spell targets, or marking focus fire. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokenIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of Token IDs on the active canvas to target (or un-target)',
+        },
+        targeted: {
+          type: 'boolean',
+          description: 'True to target, false to clear target on the given tokens (default: true)',
+          default: true,
+        },
+        replace: {
+          type: 'boolean',
+          description:
+            'True to release all existing targets before setting new ones (default: false)',
+          default: false,
+        },
+      },
+      required: ['tokenIds'],
+    },
+  },
+  {
+    name: 'get_targets',
+    description:
+      'List the current target selections of all connected users on the active canvas. Returns each user with the tokens they currently have targeted. Requires the companion Foundry module. Use when: checking who players are aiming at or focusing on.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'ping_canvas',
+    description:
+      "Emit an animated canvas ping at specific pixel coordinates on the active scene's view, drawing every connected player's camera and attention to that exact location. Requires the companion Foundry module. Use when: pointing out a trap, landmark, or hidden detail on the map. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Pixel x coordinate to ping' },
+        y: { type: 'number', description: 'Pixel y coordinate to ping' },
+        sceneId: {
+          type: 'string',
+          description: 'Optional scene id (fails if the GM canvas is viewing a different scene)',
+        },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'set_pause',
+    description:
+      'Pause or unpause the game clock. When paused, token movement and real-time combat timers freeze for players. Requires the companion Foundry module. Use when: stepping away, narrating a long cutscene, or resolving a complex rules question. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paused: {
+          type: 'boolean',
+          description: 'True to pause, false to unpause (omit to toggle)',
+        },
+      },
+    },
+  },
+  {
+    name: 'upload_asset',
+    description:
+      "Upload a file (image, audio, etc.) into FoundryVTT's Data storage via the GM browser's FilePicker, returning the Foundry-relative path to feed directly into create_scene (backgroundSrc), create_tile (src), or create_sound (path). Provide exactly one of contentBase64 (base64-encoded file content) or sourcePath (an absolute path readable by this MCP server, which base64-encodes it server-side). Rejects payloads over 8 MiB. Requires the companion Foundry module. Use when: adding new map art, tokens, or audio the world does not already have. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        targetDir: {
+          type: 'string',
+          description: 'Data-relative destination folder (e.g. "assets/uploads")',
+        },
+        filename: {
+          type: 'string',
+          description: 'Destination filename, including extension',
+        },
+        contentBase64: {
+          type: 'string',
+          description: 'Base64-encoded file content. Mutually exclusive with sourcePath.',
+        },
+        sourcePath: {
+          type: 'string',
+          description:
+            'Absolute filesystem path readable by this MCP server. Mutually exclusive with contentBase64.',
+        },
+        mimeType: {
+          type: 'string',
+          description:
+            'Optional MIME type override; inferred from the filename extension if omitted',
+        },
+      },
+      required: ['targetDir', 'filename'],
+    },
+  },
+];
+
+/**
+ * General-purpose ActiveEffect tool definitions
+ *
+ * `apply_status_effect` (tokenMutationTools) stays the simpler, idempotent
+ * status-toggle contract; these exist for mechanical buffs/debuffs with real
+ * `changes`/`duration`.
+ */
+export const effectTools = [
+  {
+    name: 'create_actor_effect',
+    description:
+      "Create a general-purpose ActiveEffect on an actor with mechanical changes (attribute modifiers) and/or a duration - not just a status toggle (use apply_status_effect for that). Give actorId alone for a world-linked actor, or actorId plus the sceneId+tokenId pair together for an unlinked token's synthetic actor. changes[].mode is a named FoundryVTT ACTIVE_EFFECT_MODES combine rule (add/multiply/override/upgrade/downgrade/custom), not a raw number. Use when: applying a spell buff, a debuff, or an equipment bonus with a real mechanical effect. Do not use when: toggling a simple named condition (prone, stunned) - use apply_status_effect. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: { type: 'string', description: "The actor's own document id" },
+        sceneId: {
+          type: 'string',
+          description: 'Scene id, required together with tokenId for an unlinked token actor',
+        },
+        tokenId: {
+          type: 'string',
+          description: 'Token id, required together with sceneId for an unlinked token actor',
+        },
+        name: { type: 'string', description: 'Effect display name' },
+        img: { type: 'string', description: 'Optional icon image path' },
+        description: { type: 'string', description: 'Optional effect description text' },
+        disabled: {
+          type: 'boolean',
+          description: 'Create the effect already disabled (default false)',
+        },
+        statuses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional status condition ids this effect also represents',
+        },
+        duration: {
+          type: 'object',
+          description: 'Optional effect duration',
+          properties: {
+            rounds: { type: 'number' },
+            turns: { type: 'number' },
+            seconds: { type: 'number' },
+            startRound: { type: 'number' },
+            startTurn: { type: 'number' },
+          },
+        },
+        changes: {
+          type: 'array',
+          description: 'Mechanical changes this effect applies',
+          items: {
+            type: 'object',
+            properties: {
+              key: {
+                type: 'string',
+                description:
+                  'Dot-path into the actor being modified (e.g. "system.attributes.hp.max")',
+              },
+              mode: {
+                type: 'string',
+                enum: ['custom', 'multiply', 'add', 'downgrade', 'upgrade', 'override'],
+                description: 'How this change combines with the base value',
+              },
+              value: { type: 'string', description: 'Change value (always a string on the wire)' },
+              priority: {
+                type: 'number',
+                description: 'Optional application order (default: mode order)',
+              },
+            },
+            required: ['key', 'mode', 'value'],
+          },
+        },
+      },
+      required: ['actorId', 'name'],
+    },
+  },
+  {
+    name: 'update_actor_effect',
+    description:
+      "Update fields on an existing ActiveEffect - every field replaces the corresponding one on the existing document, omitted fields are left as they are. Same actorId/sceneId+tokenId resolution as create_actor_effect. Use when: a buff's remaining duration changes, or its magnitude scales. Do not use when: the effect should end - use delete_actor_effect. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: { type: 'string', description: "The actor's own document id" },
+        sceneId: {
+          type: 'string',
+          description: 'Scene id, required together with tokenId for an unlinked token actor',
+        },
+        tokenId: {
+          type: 'string',
+          description: 'Token id, required together with sceneId for an unlinked token actor',
+        },
+        effectId: { type: 'string', description: 'The ActiveEffect document id to update' },
+        name: { type: 'string', description: 'New effect display name' },
+        img: { type: 'string', description: 'New icon image path' },
+        description: { type: 'string', description: 'New effect description text' },
+        disabled: { type: 'boolean', description: 'Enable/disable the effect' },
+        statuses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Replacement status condition ids',
+        },
+        duration: {
+          type: 'object',
+          description: 'Replacement effect duration',
+          properties: {
+            rounds: { type: 'number' },
+            turns: { type: 'number' },
+            seconds: { type: 'number' },
+            startRound: { type: 'number' },
+            startTurn: { type: 'number' },
+          },
+        },
+        changes: {
+          type: 'array',
+          description: 'Replacement mechanical changes',
+          items: {
+            type: 'object',
+            properties: {
+              key: { type: 'string' },
+              mode: {
+                type: 'string',
+                enum: ['custom', 'multiply', 'add', 'downgrade', 'upgrade', 'override'],
+              },
+              value: { type: 'string' },
+              priority: { type: 'number' },
+            },
+            required: ['key', 'mode', 'value'],
+          },
+        },
+      },
+      required: ['actorId', 'effectId'],
+    },
+  },
+  {
+    name: 'delete_actor_effect',
+    description:
+      'Delete an ActiveEffect from an actor. Same actorId/sceneId+tokenId resolution as create_actor_effect. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: { type: 'string', description: "The actor's own document id" },
+        sceneId: {
+          type: 'string',
+          description: 'Scene id, required together with tokenId for an unlinked token actor',
+        },
+        tokenId: {
+          type: 'string',
+          description: 'Token id, required together with sceneId for an unlinked token actor',
+        },
+        effectId: { type: 'string', description: 'The ActiveEffect document id to delete' },
+      },
+      required: ['actorId', 'effectId'],
+    },
+  },
+  {
+    name: 'list_actor_effects',
+    description:
+      "List the ActiveEffects on a world-linked actor, read from the cached world snapshot (no socket round trip). Only reaches a top-level Actor document - an unlinked token's synthetic per-token actor is not independently listable this way. Use when: checking what buffs/debuffs are currently active on an actor before applying another.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: { type: 'string', description: "The actor's own document id" },
+      },
+      required: ['actorId'],
+    },
+  },
+];
+
+/**
+ * Scene Region tool definitions (FoundryVTT v12+)
+ */
+export const regionTools = [
+  {
+    name: 'list_regions',
+    description:
+      'List the Scene Regions placed on a scene (FoundryVTT v12+). Regions are polygon/circle/rectangle areas that trigger behaviors when tokens enter, move through, or leave them. Use when: inspecting traps, teleport pads, atmospheric zones, or scripted triggers on a map.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional scene id; defaults to the currently active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'create_region',
+    description:
+      'Create a new Scene Region with shapes and/or automated behaviors (FoundryVTT v12+). Shapes use pixel coordinates (use get_scene_info/find_open_cells to convert from grid cells). Documented behaviors include teleportToken ({ destination: <region UUID> }), displayScrollingText ({ text, color, visibility }), adjustDarknessLevel ({ mode, modifier }), and pauseGame ({ once }); custom system/module behavior types pass through untouched. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Region display name' },
+        sceneId: {
+          type: 'string',
+          description: 'Optional scene id; defaults to the currently active scene',
+        },
+        color: {
+          type: 'string',
+          description: 'Optional 6-digit hex color for canvas rendering (e.g. "#ff8800")',
+        },
+        visibility: {
+          type: 'number',
+          description: '0 = hidden from players, 1 = visible to players (default: 0)',
+        },
+        elevation: {
+          type: 'object',
+          description: 'Optional 3D vertical bounds (null for unbounded)',
+          properties: {
+            bottom: { type: 'number' },
+            top: { type: 'number' },
+          },
+        },
+        shapes: {
+          type: 'array',
+          description: 'Pixel-coordinate geometric shapes defining the region boundary',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['rectangle', 'circle', 'polygon'] },
+              x: { type: 'number' },
+              y: { type: 'number' },
+              width: { type: 'number' },
+              height: { type: 'number' },
+              radius: { type: 'number' },
+              points: {
+                type: 'array',
+                items: { type: 'number' },
+                description: 'For polygon: array of alternating x,y coordinates (at least 6)',
+              },
+            },
+            required: ['type'],
+          },
+        },
+        behaviors: {
+          type: 'array',
+          description: 'Automated behaviors triggered when tokens interact with the region',
+          items: {
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                description:
+                  'Behavior type string, e.g. "teleportToken", "displayScrollingText", "adjustDarknessLevel", "pauseGame"',
+              },
+              system: { type: 'object', description: 'Behavior configuration data' },
+              disabled: { type: 'boolean', description: 'Create the behavior disabled' },
+            },
+            required: ['type'],
+          },
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'delete_region',
+    description:
+      'Delete a Scene Region from a scene (FoundryVTT v12+). ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        regionId: { type: 'string', description: 'The Region document id to delete' },
+        sceneId: {
+          type: 'string',
+          description: 'Optional scene id; defaults to the currently active scene',
+        },
+      },
+      required: ['regionId'],
+    },
+  },
+];
+
+/**
+ * World-event tool definitions
+ *
+ * Backed by an in-memory, cursor-addressed log of every `modifyDocument` /
+ * `userActivity` broadcast this server has observed (plus canvas events
+ * pushed by the companion module). Read-only.
+ */
+export const eventTools = [
+  {
+    name: 'watch_events',
+    description:
+      "Wait for and return world activity since a cursor - chat messages, token/actor/combat updates, door state changes, user connect/disconnect, and canvas targeting - instead of re-polling get_chat_messages/get_combat_state in a loop. Blocks for up to waitMs (default 25000, max 120000) if nothing has happened yet, returning as soon as something does; pass 0 to check without waiting. Your MCP client's own request timeout must exceed waitMs or the call will appear to fail while still running server-side. Always pass the returned nextCursor back as `cursor` on your next call - it is required to avoid missing or re-reading events, and a nonzero `dropped` count means events were evicted from the buffer before your cursor (increase FOUNDRY_EVENT_BUFFER_SIZE, or catch up with refresh_world_data/get_scene_info). Changing kinds/types/actions/sceneId mid-stream cannot recover events a previous filter already skipped past. Use when: waiting for a player to act, or checking what happened while you were doing something else. Do not use when: you need the full current state of something - use the matching get_*/search_* tool instead.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: {
+          type: 'string',
+          description:
+            '"now" (default) to start from this moment, "oldest" for the full retained buffer, or a nextCursor value from a previous call',
+          default: 'now',
+        },
+        waitMs: {
+          type: 'number',
+          description:
+            'Milliseconds to block waiting for a new event before returning empty (default 25000, max 120000, 0 = return immediately)',
+          default: 25000,
+          minimum: 0,
+          maximum: 120000,
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum events to return in one call (default 50, max 200)',
+          default: 50,
+          minimum: 1,
+          maximum: 200,
+        },
+        kinds: {
+          type: 'array',
+          items: { type: 'string', enum: ['document', 'presence', 'target'] },
+          description: 'Restrict to these event kinds (default: all)',
+        },
+        types: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Restrict to these document names, e.g. ["ChatMessage","Token","Combat"] (default: all)',
+        },
+        actions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Restrict to these actions, e.g. ["create","update"] (default: all)',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Restrict to events on this scene (default: all scenes)',
+        },
+        excludeSelf: {
+          type: 'boolean',
+          description:
+            "Drop events this server's own writes caused, when FoundryVTT echoes them back (default true)",
+          default: true,
+        },
+      },
+    },
+  },
 ];
 
 /**
@@ -2426,6 +3177,9 @@ export function getAllTools() {
     ...worldDocumentMutationTools,
     ...rollTableTools,
     ...moduleBridgeTools,
+    ...eventTools,
+    ...effectTools,
+    ...regionTools,
     ...generationTools,
     ...settingsTools,
     ...diagnosticsTools,

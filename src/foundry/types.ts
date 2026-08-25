@@ -636,6 +636,75 @@ export const VISIBILITY_LEVELS: Record<DocumentVisibility, number> = {
 };
 
 /**
+ * FoundryVTT's `CONST.DOCUMENT_OWNERSHIP_LEVELS` — who can read, observe, or
+ * edit a document.
+ */
+export const OWNERSHIP_LEVELS = {
+  none: 0,
+  limited: 1,
+  observer: 2,
+  owner: 3,
+} as const;
+
+/**
+ * FoundryVTT's `CONST.USER_ROLES` — user permission tiers.
+ */
+export const USER_ROLES = {
+  none: 0,
+  player: 1,
+  trusted: 2,
+  assistant: 3,
+  gamemaster: 4,
+} as const;
+
+/**
+ * FoundryVTT's `CONST.ACTIVE_EFFECT_MODES` — how an `ActiveEffect` change
+ * combines with the base value. Tools accept the string name, never the raw
+ * number: an LLM misremembering whether `override` is `2` or `5` would
+ * silently apply the wrong mechanic rather than fail loudly.
+ */
+export const ACTIVE_EFFECT_MODES = {
+  custom: 0,
+  multiply: 1,
+  add: 2,
+  downgrade: 3,
+  upgrade: 4,
+  override: 5,
+} as const;
+
+/** An `ActiveEffect` change entry, as sent over `modifyDocument`. */
+export interface ActorEffectChangeInput {
+  key: string;
+  mode: keyof typeof ACTIVE_EFFECT_MODES;
+  value: string;
+  priority?: number;
+}
+
+/** Duration fields accepted when creating/updating an actor's `ActiveEffect`. */
+export interface ActorEffectDurationInput {
+  rounds?: number;
+  turns?: number;
+  seconds?: number;
+  startRound?: number;
+  startTurn?: number;
+}
+
+/**
+ * Create/update payload for an actor's `ActiveEffect`. `name` is required on
+ * create; every field is optional on update (each supplied field replaces
+ * the corresponding one on the existing document).
+ */
+export interface ActorEffectInput {
+  name?: string;
+  img?: string;
+  description?: string;
+  disabled?: boolean;
+  statuses?: string[];
+  duration?: ActorEffectDurationInput;
+  changes?: ActorEffectChangeInput[];
+}
+
+/**
  * Result structure for an actor attribute update (#143).
  *
  * Returned by `FoundryClient.updateActorAttribute`. The `updatedAttributes`
@@ -817,6 +886,8 @@ export interface WorldScene {
   notes?: Array<Record<string, unknown>>;
   tiles?: Array<Record<string, unknown>>;
   templates?: Array<Record<string, unknown>>;
+  /** Scene Region documents (FoundryVTT v12+). */
+  regions?: Array<Record<string, unknown>>;
   darkness: number;
   globalLight: boolean;
   globalLightThreshold?: number;

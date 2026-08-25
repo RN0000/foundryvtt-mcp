@@ -168,10 +168,7 @@ export async function handleSetSceneLighting(
 /**
  * Handles resetting fog of war exploration for a scene.
  */
-export async function handleResetFog(
-  args: { sceneId?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleResetFog(args: { sceneId?: string }, foundryClient: FoundryClient) {
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('reset fog', async () => {
@@ -183,6 +180,39 @@ export async function handleResetFog(
         {
           type: 'text',
           text: `🌫️ **Fog of War Reset Requested**\n**Scene:** ${scene?.name ?? sceneId} (${sceneId})\n_Exploration progress reset sent via socket; verify canvas via capture_scene if needed._`,
+        },
+      ],
+    };
+  });
+}
+
+/**
+ * Handles updating or clearing a scene's weather effect.
+ */
+export async function handleSetSceneWeather(
+  args: { weather: string; sceneId?: string },
+  foundryClient: FoundryClient,
+) {
+  const { weather } = args;
+  if (typeof weather !== 'string') {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'weather is required and must be a string (empty to clear)',
+    );
+  }
+  const sceneId = resolveSceneId(args.sceneId, foundryClient);
+
+  return withToolError('set scene weather', async () => {
+    const target = foundryClient.getScenes().find((s) => s._id === sceneId);
+    const name = target?.name ?? sceneId;
+    await foundryClient.setSceneWeather(sceneId, weather);
+
+    const label = weather ? `set to "${weather}"` : 'cleared';
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🌧️ **Scene Weather Updated**\n**Scene:** ${name} (${sceneId})\n**Weather:** ${label}`,
         },
       ],
     };

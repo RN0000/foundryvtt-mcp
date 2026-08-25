@@ -2,7 +2,9 @@
  * User management tool handler
  */
 
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import { USER_ROLES } from '../../foundry/types.js';
 import { withToolError } from './utils.js';
 
 const ROLE_NAMES: Record<number, string> = {
@@ -33,6 +35,39 @@ export async function handleGetUsers(_args: Record<string, unknown>, foundryClie
         {
           type: 'text',
           text: `**Users** (${onlineCount}/${users.length} online)\n\n${formatted}`,
+        },
+      ],
+    };
+  });
+}
+
+export async function handleSetUserRole(
+  args: { userId: string; role: string },
+  foundryClient: FoundryClient,
+) {
+  const { userId, role } = args;
+  if (!userId || typeof userId !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'userId is required and must be a string');
+  }
+  if (!role || typeof role !== 'string' || !(role in USER_ROLES)) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      `Invalid role "${role}": expected one of ${Object.keys(USER_ROLES).join(', ')}`,
+    );
+  }
+
+  return withToolError('set user role', async () => {
+    const { users } = foundryClient.getUsers();
+    const target = users.find((u) => u._id === userId);
+    const name = target?.name ?? userId;
+
+    await foundryClient.setUserRole(userId, role as keyof typeof USER_ROLES);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `👤 **User Role Updated**\n**User:** ${name} (\`${userId}\`)\n**Role:** ${role}`,
         },
       ],
     };

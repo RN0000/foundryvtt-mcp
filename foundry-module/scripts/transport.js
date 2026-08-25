@@ -83,6 +83,20 @@ export class BridgeTransport {
     this.socket.send(JSON.stringify(response));
   }
 
+  /**
+   * Pushes an unsolicited `{event, payload}` message — canvas activity
+   * (targeting, pings) the bridge has no outstanding request for. Silently
+   * no-ops while disconnected: a Foundry hook firing during a dropped
+   * connection must never throw back into Foundry's own event dispatch.
+   *
+   * @param {string} event
+   * @param {Record<string, unknown>} payload
+   */
+  sendEvent(event, payload) {
+    if (this.socket?.readyState !== WS_OPEN) return;
+    this.socket.send(JSON.stringify({ event, payload }));
+  }
+
   scheduleReconnect() {
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       console.warn('FoundryVTT MCP Bridge | max reconnect attempts reached');

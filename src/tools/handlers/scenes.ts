@@ -48,10 +48,7 @@ export async function handleGetSceneInfo(
  * Resolves a sceneId, defaulting to the currently active scene if omitted.
  * Throws an McpError if no scene is active and no sceneId is provided.
  */
-export function resolveSceneId(
-  sceneId: string | undefined,
-  foundryClient: FoundryClient,
-): string {
+export function resolveSceneId(sceneId: string | undefined, foundryClient: FoundryClient): string {
   if (sceneId) return sceneId;
   const active = foundryClient.getScenes().find((s) => s.active);
   if (!active) {
@@ -162,10 +159,7 @@ export async function handleListTokens(args: { sceneId?: string }, foundryClient
 /**
  * Handles listing the AmbientLights placed on a scene.
  */
-export async function handleListLights(
-  args: { sceneId?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleListLights(args: { sceneId?: string }, foundryClient: FoundryClient) {
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('list lights', async () => {
@@ -194,10 +188,7 @@ export async function handleListLights(
 /**
  * Handles listing the AmbientSounds placed on a scene.
  */
-export async function handleListSounds(
-  args: { sceneId?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleListSounds(args: { sceneId?: string }, foundryClient: FoundryClient) {
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('list sounds', async () => {
@@ -226,10 +217,7 @@ export async function handleListSounds(
 /**
  * Handles listing the Notes (map pins) placed on a scene.
  */
-export async function handleListNotes(
-  args: { sceneId?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleListNotes(args: { sceneId?: string }, foundryClient: FoundryClient) {
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('list notes', async () => {
@@ -258,10 +246,7 @@ export async function handleListNotes(
 /**
  * Handles listing the Drawings placed on a scene.
  */
-export async function handleListDrawings(
-  args: { sceneId?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleListDrawings(args: { sceneId?: string }, foundryClient: FoundryClient) {
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('list drawings', async () => {
@@ -301,7 +286,9 @@ export async function handleListTemplates(
     const templates = foundryClient.listTemplates(sceneId);
     if (templates.length === 0) {
       return {
-        content: [{ type: 'text', text: `📐 **No measured templates on ${scene?.name ?? sceneId}.**` }],
+        content: [
+          { type: 'text', text: `📐 **No measured templates on ${scene?.name ?? sceneId}.**` },
+        ],
       };
     }
     const lines = templates.map(
@@ -392,6 +379,39 @@ export async function handleListSceneAssets(
         {
           type: 'text',
           text: `🖼️ **Scene Assets** (${assets.length})\n${lines.join('\n')}`,
+        },
+      ],
+    };
+  });
+}
+
+/**
+ * Handles listing the Scene Regions placed on a scene (FoundryVTT v12+).
+ */
+export async function handleListRegions(args: { sceneId?: string }, foundryClient: FoundryClient) {
+  const sceneId = resolveSceneId(args.sceneId, foundryClient);
+
+  return withToolError('list regions', async () => {
+    const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
+    const regions = foundryClient.listRegions(sceneId);
+    if (regions.length === 0) {
+      return {
+        content: [{ type: 'text', text: `🌐 **No regions on ${scene?.name ?? sceneId}.**` }],
+      };
+    }
+    const lines = regions.map((r) => {
+      const elev =
+        r.elevation.bottom !== null || r.elevation.top !== null
+          ? ` elevation: [${r.elevation.bottom ?? '-∞'}, ${r.elevation.top ?? '+∞'}]`
+          : '';
+      const color = r.color ? ` color: ${r.color}` : '';
+      return `- **${r.name || r.id}** (\`${r.id}\`)${color}${elev} (${r.shapesCount} shape${r.shapesCount === 1 ? '' : 's'}, ${r.behaviorsCount} behavior${r.behaviorsCount === 1 ? '' : 's'})`;
+    });
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🌐 **Scene Regions on ${scene?.name ?? sceneId}** (${regions.length})\n${lines.join('\n')}`,
         },
       ],
     };

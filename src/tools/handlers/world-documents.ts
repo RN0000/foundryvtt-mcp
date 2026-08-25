@@ -4,16 +4,14 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import type { OWNERSHIP_LEVELS } from '../../foundry/types.js';
 import { withToolError } from './utils.js';
 
 // ============================================================================
 // Folder handlers
 // ============================================================================
 
-export async function handleListFolders(
-  args: { type?: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleListFolders(args: { type?: string }, foundryClient: FoundryClient) {
   return withToolError('list folders', async () => {
     const folders = foundryClient.listFolders(args);
     if (folders.length === 0) {
@@ -140,10 +138,7 @@ export async function handleCreateMacro(
   });
 }
 
-export async function handleDeleteMacro(
-  args: { macroId: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleDeleteMacro(args: { macroId: string }, foundryClient: FoundryClient) {
   const { macroId } = args;
   if (!macroId || typeof macroId !== 'string') {
     throw new McpError(ErrorCode.InvalidParams, 'macroId is required and must be a string');
@@ -181,10 +176,7 @@ export async function handleListPlaylists(
     const lines = playlists.map((p) => {
       const modeLabel = ['', 'sequential', 'shuffle', 'simultaneous'][p.mode + 1] ?? 'unknown';
       const soundLines = p.sounds
-        .map(
-          (s) =>
-            `    - ${s.name} (${s.id}) — \`${s.path}\`${s.playing ? ' [playing]' : ''}`,
-        )
+        .map((s) => `    - ${s.name} (${s.id}) — \`${s.path}\`${s.playing ? ' [playing]' : ''}`)
         .join('\n');
       return `- **${p.name}** (${p.id}) — ${p.playing ? '▶️ playing' : '⏹️ stopped'}, mode: ${modeLabel}, channel: ${p.channel} (${p.soundCount} track${p.soundCount !== 1 ? 's' : ''})${soundLines ? `\n${soundLines}` : ''}`;
     });
@@ -283,6 +275,46 @@ export async function handleDeletePlaylist(
         {
           type: 'text',
           text: `🗑️ **Playlist Deleted**\n**ID:** ${playlistId}`,
+        },
+      ],
+    };
+  });
+}
+
+// ============================================================================
+// Document ownership handlers
+// ============================================================================
+
+export async function handleSetDocumentOwnership(
+  args: {
+    documentType: 'Actor' | 'Item' | 'Scene' | 'JournalEntry' | 'RollTable' | 'Macro';
+    documentId: string;
+    entries: Array<{ target: string; level: keyof typeof OWNERSHIP_LEVELS }>;
+  },
+  foundryClient: FoundryClient,
+) {
+  const { documentType, documentId, entries } = args;
+  if (!documentType || typeof documentType !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'documentType is required and must be a string');
+  }
+  if (!documentId || typeof documentId !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'documentId is required and must be a string');
+  }
+  if (!Array.isArray(entries) || entries.length === 0) {
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'entries is required and must contain at least one { target, level } entry',
+    );
+  }
+
+  return withToolError('set document ownership', async () => {
+    await foundryClient.setDocumentOwnership(documentType, documentId, entries);
+    const formatted = entries.map((e) => `- ${e.target}: ${e.level}`).join('\n');
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🔐 **Document Ownership Updated**\n**Type:** ${documentType}\n**ID:** ${documentId}\n**Permissions:**\n${formatted}`,
         },
       ],
     };

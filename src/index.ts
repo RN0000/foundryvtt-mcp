@@ -79,6 +79,7 @@ class FoundryMCPServer {
       retryAttempts: config.foundry.retryAttempts,
       retryDelay: config.foundry.retryDelay,
       writeEnabled: config.foundry.writeEnabled,
+      eventBufferSize: config.events.bufferSize,
     };
     if (config.foundry.apiKey) {
       clientConfig.apiKey = config.foundry.apiKey;
@@ -103,6 +104,12 @@ class FoundryMCPServer {
     this.moduleBridge = config.moduleBridge.enabled
       ? new ModuleBridge(config.moduleBridge.port)
       : null;
+    if (this.moduleBridge) {
+      // The bridge stays ignorant of FoundryClient; it only relays what the
+      // module pushed unsolicited (canvas targeting, pings, …).
+      this.moduleBridge.onEvent = (type, payload) =>
+        this.foundryClient.recordModuleEvent(type, payload);
+    }
 
     // Initialize DiagnosticsClient
     this.diagnosticsClient = new DiagnosticsClient(this.foundryClient);

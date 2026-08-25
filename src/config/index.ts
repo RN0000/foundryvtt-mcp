@@ -89,6 +89,16 @@ const ConfigSchema = z.object({
   assets: z.object({
     dataPath: z.string().optional(),
   }),
+
+  /**
+   * In-memory world-event ring backing `watch_events` — the cursor-addressed
+   * activity log an agent long-polls instead of re-calling
+   * `get_chat_messages`/`get_combat_state` in a loop.
+   */
+  events: z.object({
+    bufferSize: z.number().default(500),
+    defaultWaitMs: z.number().default(25000),
+  }),
 });
 
 /**
@@ -163,6 +173,15 @@ function loadConfig(): Config {
 
     assets: {
       dataPath: process.env.FOUNDRY_DATA_PATH,
+    },
+
+    events: {
+      bufferSize: process.env.FOUNDRY_EVENT_BUFFER_SIZE
+        ? parseInt(process.env.FOUNDRY_EVENT_BUFFER_SIZE, 10)
+        : undefined,
+      defaultWaitMs: process.env.FOUNDRY_EVENT_WAIT_MS
+        ? parseInt(process.env.FOUNDRY_EVENT_WAIT_MS, 10)
+        : undefined,
     },
   };
 

@@ -17,6 +17,7 @@
  */
 
 import { z } from 'zod';
+import { isRecord } from '../utils/guards.js';
 import type { WorldActor, WorldCombat, WorldData, WorldScene } from './types.js';
 
 /** A `modifyDocument` broadcast, once validated. */
@@ -28,6 +29,8 @@ export interface DocumentBroadcast {
   result: unknown[];
   /** Present for embedded documents: "Actor.<id>", "Scene.<id>", … */
   parentUuid?: string;
+  /** Foundry user id that originated the change, when the envelope carries one. */
+  userId?: string;
 }
 
 /**
@@ -64,16 +67,13 @@ const EMBEDDED_COLLECTIONS: Record<string, Record<string, string>> = {
     Note: 'notes',
     Tile: 'tiles',
     MeasuredTemplate: 'templates',
+    Region: 'regions',
   },
   Combat: { Combatant: 'combatants' },
   Item: { ActiveEffect: 'effects' },
   Playlist: { PlaylistSound: 'sounds' },
   RollTable: { TableResult: 'results' },
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /**
  * Validates a raw socket payload as a `modifyDocument` broadcast.
@@ -107,6 +107,10 @@ export function parseDocumentBroadcast(payload: unknown): DocumentBroadcast | nu
   const parentUuid = isRecord(operation) ? operation.parentUuid : undefined;
   if (typeof parentUuid === 'string' && parentUuid) {
     broadcast.parentUuid = parentUuid;
+  }
+
+  if (typeof payload.userId === 'string' && payload.userId) {
+    broadcast.userId = payload.userId;
   }
   return broadcast;
 }

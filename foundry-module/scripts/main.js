@@ -4,6 +4,11 @@ import { getDocumentSchema } from './commands/get-schema.js';
 import { searchCompendiumContent } from './commands/search-compendium-content.js';
 import { getCompendiumDocument } from './commands/get-compendium-document.js';
 import { rollAndPost } from './commands/roll-and-post.js';
+import { setTarget } from './commands/set-target.js';
+import { getTargets } from './commands/get-targets.js';
+import { pingCanvas } from './commands/ping-canvas.js';
+import { setPause } from './commands/set-pause.js';
+import { uploadAsset } from './commands/upload-asset.js';
 
 const MODULE_ID = 'foundryvtt-mcp-bridge';
 
@@ -14,6 +19,11 @@ const COMMANDS = {
   search_compendium_content: (params) => searchCompendiumContent(params),
   get_compendium_document: (params) => getCompendiumDocument(params),
   roll_and_post: (params) => rollAndPost(params),
+  set_target: (params) => setTarget(params),
+  get_targets: () => getTargets(),
+  ping_canvas: (params) => pingCanvas(params),
+  set_pause: (params) => setPause(params),
+  upload_asset: (params) => uploadAsset(params),
 };
 
 /** @type {BridgeTransport | null} */
@@ -44,6 +54,20 @@ Hooks.once('ready', () => {
     return handler(params);
   });
   transport.connect();
+
+  // Pushed unsolicited (no outstanding request) so `watch_events` on the
+  // server sees canvas targeting, which never crosses FoundryVTT's own
+  // `modifyDocument` Socket.IO channel.
+  Hooks.on('targetToken', (user, token, targeted) => {
+    transport?.sendEvent('target_token', {
+      userId: user?.id,
+      userName: user?.name,
+      tokenId: token?.id,
+      tokenName: token?.document?.name ?? token?.name,
+      sceneId: token?.scene?.id ?? canvas?.scene?.id,
+      targeted: !!targeted,
+    });
+  });
 });
 
 Hooks.once('closeGame', () => {

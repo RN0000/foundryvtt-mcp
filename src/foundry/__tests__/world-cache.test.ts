@@ -79,6 +79,25 @@ describe('parseDocumentBroadcast', () => {
     expect(parsed?.parentUuid).toBe(`Actor.${ACTOR_ID}`);
   });
 
+  it('captures userId when the envelope carries one', () => {
+    const parsed = parseDocumentBroadcast({
+      type: 'ChatMessage',
+      action: 'create',
+      result: [{ _id: JOURNAL_ID }],
+      userId: 'user0001user0001',
+    });
+    expect(parsed?.userId).toBe('user0001user0001');
+  });
+
+  it('parses fine with userId absent', () => {
+    const parsed = parseDocumentBroadcast({
+      type: 'ChatMessage',
+      action: 'create',
+      result: [{ _id: JOURNAL_ID }],
+    });
+    expect(parsed?.userId).toBeUndefined();
+  });
+
   it.each([
     ['not an object', 'nope'],
     ['missing type', { action: 'create', result: [] }],

@@ -38,7 +38,9 @@ export async function handleCreateLight(
 
   return withToolError('create light', async () => {
     const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
-    const created = (await foundryClient.createLight(sceneId, args)) as { _id?: string } | undefined;
+    const created = (await foundryClient.createLight(sceneId, args)) as
+      | { _id?: string }
+      | undefined;
     const lightId = created?._id ?? 'unknown';
 
     return {
@@ -144,7 +146,9 @@ export async function handleCreateSound(
 
   return withToolError('create sound', async () => {
     const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
-    const created = (await foundryClient.createSound(sceneId, path, args)) as { _id?: string } | undefined;
+    const created = (await foundryClient.createSound(sceneId, path, args)) as
+      | { _id?: string }
+      | undefined;
     const soundId = created?._id ?? 'unknown';
 
     return {
@@ -274,14 +278,21 @@ export async function handleCreateDrawing(
   },
   foundryClient: FoundryClient,
 ) {
-  if (typeof args.x !== 'number' || !Number.isFinite(args.x) || typeof args.y !== 'number' || !Number.isFinite(args.y)) {
+  if (
+    typeof args.x !== 'number' ||
+    !Number.isFinite(args.x) ||
+    typeof args.y !== 'number' ||
+    !Number.isFinite(args.y)
+  ) {
     throw new McpError(ErrorCode.InvalidParams, 'x and y are required and must be finite numbers');
   }
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('create drawing', async () => {
     const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
-    const created = (await foundryClient.createDrawing(sceneId, args)) as { _id?: string } | undefined;
+    const created = (await foundryClient.createDrawing(sceneId, args)) as
+      | { _id?: string }
+      | undefined;
     const drawingId = created?._id ?? 'unknown';
 
     return {
@@ -343,13 +354,18 @@ export async function handleCreateTemplate(
   foundryClient: FoundryClient,
 ) {
   if (typeof args.distance !== 'number' || !Number.isFinite(args.distance) || args.distance < 0) {
-    throw new McpError(ErrorCode.InvalidParams, 'distance is required and must be a finite non-negative number');
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'distance is required and must be a finite non-negative number',
+    );
   }
   const sceneId = resolveSceneId(args.sceneId, foundryClient);
 
   return withToolError('create template', async () => {
     const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
-    const created = (await foundryClient.createTemplate(sceneId, args)) as { _id?: string } | undefined;
+    const created = (await foundryClient.createTemplate(sceneId, args)) as
+      | { _id?: string }
+      | undefined;
     const templateId = created?._id ?? 'unknown';
 
     return {
@@ -382,6 +398,74 @@ export async function handleDeleteTemplate(
         {
           type: 'text',
           text: `🧹 **Measured Template Deleted**\n**ID:** ${templateId}\n**Scene:** ${scene?.name ?? sceneId} (${sceneId})`,
+        },
+      ],
+    };
+  });
+}
+
+// ============================================================================
+// Region handlers (FoundryVTT v12+)
+// ============================================================================
+
+export async function handleCreateRegion(
+  args: {
+    name: string;
+    sceneId?: string;
+    color?: string;
+    visibility?: number;
+    elevation?: { bottom?: number; top?: number };
+    shapes?: Array<
+      | { type: 'rectangle'; x: number; y: number; width: number; height: number }
+      | { type: 'circle'; x: number; y: number; radius: number }
+      | { type: 'polygon'; points: number[] }
+    >;
+    behaviors?: Array<{ type: string; system?: Record<string, unknown>; disabled?: boolean }>;
+  },
+  foundryClient: FoundryClient,
+) {
+  if (!args.name || typeof args.name !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'name is required and must be a string');
+  }
+  const sceneId = resolveSceneId(args.sceneId, foundryClient);
+
+  return withToolError('create region', async () => {
+    const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
+    const created = (await foundryClient.createRegion(sceneId, args)) as
+      | { _id?: string }
+      | undefined;
+    const regionId = created?._id ?? 'unknown';
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🌐 **Scene Region Created**\n**ID:** ${regionId}\n**Name:** ${args.name}\n**Scene:** ${scene?.name ?? sceneId} (${sceneId})${args.color ? `\n**Color:** ${args.color}` : ''}`,
+        },
+      ],
+    };
+  });
+}
+
+export async function handleDeleteRegion(
+  args: { regionId: string; sceneId?: string },
+  foundryClient: FoundryClient,
+) {
+  const { regionId } = args;
+  if (!regionId || typeof regionId !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'regionId is required and must be a string');
+  }
+  const sceneId = resolveSceneId(args.sceneId, foundryClient);
+
+  return withToolError('delete region', async () => {
+    const scene = foundryClient.getScenes().find((s) => s._id === sceneId);
+    await foundryClient.deleteRegion(sceneId, regionId);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🧹 **Scene Region Deleted**\n**ID:** ${regionId}\n**Scene:** ${scene?.name ?? sceneId} (${sceneId})`,
         },
       ],
     };

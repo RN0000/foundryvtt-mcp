@@ -18,6 +18,7 @@
  */
 
 import { WebSocket, WebSocketServer } from 'ws';
+import { isRecord } from '../utils/guards.js';
 import { logger } from '../utils/logger.js';
 
 interface PendingRequest {
@@ -26,12 +27,15 @@ interface PendingRequest {
   timeout: NodeJS.Timeout;
 }
 
-/** A `{id, type, params}` command sent to the module, or `{id, result}` / `{id, error}` sent back. */
+/** A `{id, type, params}` command sent to the module, or `{id, result}` / `{id, error}` sent
+ *  back, or an unsolicited `{event, payload}` push (e.g. canvas targeting). */
 interface BridgeMessage {
   id?: unknown;
   type?: unknown;
   result?: unknown;
   error?: unknown;
+  event?: unknown;
+  payload?: unknown;
 }
 
 function isBridgeMessage(value: unknown): value is BridgeMessage {
@@ -45,6 +49,12 @@ export class ModuleBridge {
   private nextId = 1;
   private readonly port: number;
   private readonly requestTimeoutMs: number;
+  /**
+   * Invoked for every unsolicited `{event, payload}` push from the module —
+   * canvas activity (targeting, pings) that never crosses FoundryVTT's own
+   * `modifyDocument` Socket.IO channel. `null` when nobody is listening.
+   */
+  onEvent: ((type: string, payload: Record<string, unknown>) => void) | null = null;
 
   constructor(port: number, requestTimeoutMs = 15000) {
     this.port = port;
@@ -139,7 +149,15 @@ export class ModuleBridge {
       logger.warn('Module bridge received non-JSON message');
       return;
     }
-    if (!isBridgeMessage(parsed) || typeof parsed.id !== 'string') {
+    if (!isBridgeMessage(parsed)) {
+      logger.warn('Module bridge received a message with no request id');
+      return;
+    }
+    if (typeof parsed.id !== 'string') {
+      if (typeof parsed.event === 'string') {
+        this.onEvent?.(parsed.event, isRecord(parsed.payload) ? parsed.payload : {});
+        return;
+      }
       logger.warn('Module bridge received a message with no request id');
       return;
     }
