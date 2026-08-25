@@ -4,11 +4,13 @@ This is the companion FoundryVTT module for the [FoundryVTT MCP Server](https://
 
 While the MCP server handles game-state reads and document mutations over Socket.IO, some features require access to the live browser runtime, PIXI canvas, or Foundry's internal JavaScript APIs:
 
-- 📸 **Live Canvas Viewport Screenshots**: `canvas.app.renderer.extract` captures the GM view with burned-in grid coordinates (`[col, row]`) for spatial AI reasoning.
-- 🎲 **Interactive Chat Roll Cards**: evaluates `new Roll(formula).evaluate()` and posts authentic, clickable 3D-dice roll cards.
-- 📦 **Compendium Deep Search & Document Extraction**: searches pack indices and loads full compendium documents without blocking the main socket loop.
-- 📑 **DataModel Schema Introspection**: dynamically introspects `CONFIG.Actor.dataModels` and `CONFIG.Item.dataModels` for exact field schemas.
-
+- 📸 **Live Canvas Viewport Screenshots (`capture-scene`)**: `canvas.app.renderer.extract` captures the GM view with burned-in grid coordinates (`[col, row]`) for spatial AI reasoning.
+- 🎲 **Interactive Chat Roll Cards (`roll-and-post`)**: evaluates `new Roll(formula).evaluate()` and posts authentic, clickable 3D-dice roll cards.
+- 🎯 **Token Targeting & Canvas Pings (`set-target`, `get-targets`, `ping-canvas`)**: sets token targeting reticles, inspects connected users' target selections, and broadcasts animated camera pings to all players on the active scene.
+- ⏸️ **Game Clock Controls (`set-pause`)**: pauses or resumes the game clock directly in the GM browser session.
+- 📤 **Native FilePicker Asset Uploads (`upload-asset`)**: uploads images, maps, and audio directly via Foundry's internal `FilePicker.upload()` API.
+- 📦 **Compendium Deep Search & Document Extraction (`search-compendium-content`, `get-compendium-document`)**: searches pack indices with regex text matching and extracts raw compendium documents for world imports.
+- 📑 **DataModel Schema Introspection (`get-schema`)**: dynamically introspects `CONFIG.Actor.dataModels` and `CONFIG.Item.dataModels` for exact system field schemas and choices.
 ---
 
 ## 📦 Installation in FoundryVTT
@@ -45,4 +47,4 @@ In FoundryVTT under **Configure Settings** → **Module Settings** → **Foundry
 
 - The companion bridge communicates **strictly over local WebSocket (`ws://localhost:<port>`)**.
 - Only users with GM / Assistant GM permissions can execute bridge commands.
-- Commands are scoped to safe, pre-defined handlers (`capture-scene`, `roll-and-post`, `search-compendium-content`, `get-compendium-document`, `get-schema`). No arbitrary `eval` is permitted.
+- Commands are scoped to safe, pre-defined handlers (`capture-scene`, `roll-and-post`, `search-compendium-content`, `get-compendium-document`, `get-schema`, `set-target`, `get-targets`, `ping-canvas`, `set-pause`, `upload-asset`). No arbitrary `eval` is permitted.
