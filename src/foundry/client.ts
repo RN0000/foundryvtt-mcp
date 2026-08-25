@@ -5,9 +5,17 @@
  * caches worldData in memory, and serves all queries from the snapshot.
  */
 
+import { type Dirent, readdirSync } from 'node:fs';
+import {
+  join as pathJoin,
+  relative as pathRelative,
+  resolve as pathResolve,
+  sep as pathSep,
+} from 'node:path';
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
 import { io, type Socket } from 'socket.io-client';
 import { z } from 'zod';
+import { getImageSize, type ImageSize } from '../utils/image-size.js';
 import { logger } from '../utils/logger.js';
 import { authenticateFoundry, sessionSocketOptions } from './auth.js';
 import { evaluateDiceFormula } from './dice-formula.js';
@@ -44,6 +52,62 @@ import {
 
 /** FoundryVTT document IDs are 16-character alphanumeric strings. */
 const FOUNDRY_ID_PATTERN = /^[a-zA-Z0-9]{16}$/;
+
+/** Extensions {@link FoundryClient.listSceneAssets} treats as browsable image assets. */
+const IMAGE_EXTENSION_PATTERN = /\.(png|jpe?g|webp)$/i;
+
+/** Extensions {@link FoundryClient.listSceneAssets} treats as browsable audio assets. */
+const AUDIO_EXTENSION_PATTERN = /\.(mp3|ogg|wav|m4a|flac|opus|webm)$/i;
+
+/** 6-digit hex color pattern used by Foundry ColorField. */
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+/** Document types that can be organized into Folders. */
+const FOLDER_DOCUMENT_TYPES = [
+  'Actor',
+  'Adventure',
+  'Item',
+  'Scene',
+  'JournalEntry',
+  'Playlist',
+  'RollTable',
+  'Cards',
+  'Macro',
+  'Compendium',
+] as const;
+/**
+ * `type` option for {@link FoundryClient.createWall}, matching FoundryVTT's
+ * own named wall presets (the ones its wall-tool palette offers), not an
+ * invented vocabulary:
+ *  - `wall` — solid: blocks movement and sight (Foundry's schema default)
+ *  - `door` / `secretDoor` — openable via {@link FoundryClient.setDoorState}
+ *  - `terrain` — blocks movement, but sight only blocks on the *second*
+ *    crossing (WALL_SENSE_TYPES.LIMITED) — hedges, foliage: you can see the
+ *    hedge but not what is directly behind it
+ *  - `invisible` — blocks movement, not sight (furniture, low obstacles,
+ *    hidden traps)
+ *  - `ethereal` — the inverse of `invisible`: blocks sight, not movement
+ *    (magical curtains, spectral barriers)
+ */
+export type WallType = 'wall' | 'door' | 'secretDoor' | 'terrain' | 'invisible' | 'ethereal';
+
+/**
+ * Wall field presets for {@link FoundryClient.createWall}'s `type` option.
+ * A plain "wall" sets no fields, relying on Foundry's own Wall schema
+ * defaults (blocks movement and sight). `WALL_SENSE_TYPES`/`WALL_MOVEMENT_TYPES`
+ * NONE (0) and LIMITED (10) are hardcoded here — both are stable across every
+ * Foundry version this project targets (v10+, confirmed against v12) — but no
+ * preset touches the exact "blocking" (NORMAL) value, which is left to the
+ * server's own schema default rather than guessed.
+ */
+const WALL_TYPE_PRESETS: Record<WallType, Record<string, number>> = {
+  wall: {},
+  door: { door: 1, ds: 0 },
+  secretDoor: { door: 2, ds: 0 },
+  terrain: { sight: 10 },
+  invisible: { sight: 0 },
+  ethereal: { move: 0 },
+};
 
 /**
  * Characters a dice formula may contain. A cheap sanity gate, not a grammar:
@@ -163,6 +227,14 @@ export interface FoundryClientConfig {
   socketPath?: string;
   /** Opt-in gate for game-state mutations (FOUNDRY_WRITE_ENABLED). Default false. */
   writeEnabled?: boolean;
+  /**
+   * Absolute filesystem path to FoundryVTT's `Data` directory (FOUNDRY_DATA_PATH).
+   * Optional: only set when this server runs on the same host as FoundryVTT.
+   * Backs `list_scene_assets` and lets `create_scene`/`create_tile` read an
+   * image's real pixel dimensions from disk instead of requiring the caller
+   * to supply them.
+   */
+  dataPath?: string;
 }
 
 /** Minimal shape of FoundryVTT's `modifyDocument` Socket.IO acknowledgement. */
@@ -178,6 +250,7 @@ export interface SearchActorsParams {
   query?: string;
   type?: string;
   limit?: number;
+  cursor?: string;
 }
 
 export interface SearchItemsParams {
@@ -185,6 +258,7 @@ export interface SearchItemsParams {
   type?: string;
   rarity?: string;
   limit?: number;
+  cursor?: string;
 }
 
 export interface CompendiumSearchParams {
@@ -207,6 +281,156 @@ export interface CompendiumSearchParams {
  * `attributes.exhaustion`). Values are the scalar to set at that path.
  */
 export type AttributePatch = Record<string, number | string | boolean>;
+
+/**
+ * One entry returned by {@link FoundryClient.listTokens}: a Token document's
+ * display-relevant fields, flattened out of the raw worldData record.
+ */
+export interface SceneToken {
+  id: string;
+  name: string;
+  actorId: string | null;
+  actorLink: boolean;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  elevation: number;
+  rotation: number;
+  hidden: boolean;
+  disposition: number;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listLights}.
+ */
+export interface SceneLight {
+  id: string;
+  x: number;
+  y: number;
+  rotation: number;
+  walls: boolean;
+  vision: boolean;
+  hidden: boolean;
+  dim: number;
+  bright: number;
+  color: string | null;
+  angle: number;
+  animationType: string | null;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listSounds}.
+ */
+export interface SceneSound {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+  path: string;
+  repeat: boolean;
+  volume: number;
+  walls: boolean;
+  easing: boolean;
+  hidden: boolean;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listNotes}.
+ */
+export interface SceneNote {
+  id: string;
+  entryId: string | null;
+  pageId: string | null;
+  x: number;
+  y: number;
+  text: string;
+  iconSize: number;
+  fontSize: number;
+  textAnchor: number;
+  global: boolean;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listDrawings}.
+ */
+export interface SceneDrawing {
+  id: string;
+  shapeType: string;
+  x: number;
+  y: number;
+  width: number | null;
+  height: number | null;
+  radius: number | null;
+  points: number[];
+  rotation: number;
+  strokeColor: string | null;
+  fillType: number;
+  fillColor: string | null;
+  text: string;
+  fontSize: number;
+  hidden: boolean;
+  locked: boolean;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listTemplates}.
+ */
+export interface SceneTemplate {
+  id: string;
+  t: string;
+  x: number;
+  y: number;
+  distance: number;
+  direction: number;
+  angle: number;
+  width: number;
+  borderColor: string | null;
+  fillColor: string | null;
+  hidden: boolean;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listFolders}.
+ */
+export interface WorldFolderEntry {
+  id: string;
+  name: string;
+  type: string;
+  parent: string | null;
+  color: string | null;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listMacros}.
+ */
+export interface WorldMacroEntry {
+  id: string;
+  name: string;
+  type: string;
+  scope: string;
+  folder: string | null;
+  commandPreview: string;
+}
+
+/**
+ * One entry returned by {@link FoundryClient.listPlaylists}.
+ */
+export interface WorldPlaylistEntry {
+  id: string;
+  name: string;
+  playing: boolean;
+  mode: number;
+  channel: string;
+  soundCount: number;
+  sounds: Array<{
+    id: string;
+    name: string;
+    path: string;
+    playing: boolean;
+    volume: number;
+  }>;
+}
 
 export class FoundryClient {
   private http: AxiosInstance;
@@ -274,47 +498,73 @@ export class FoundryClient {
       );
     }
 
-    const mode = this.config.apiKey ? 'REST API' : 'Socket.IO';
+    const hasSocketCredentials = Boolean(
+      (this.config.userId || this.config.username) && this.config.password,
+    );
+    const modes = [
+      ...(this.config.apiKey ? ['REST API'] : []),
+      ...(hasSocketCredentials ? ['Socket.IO'] : []),
+    ];
+    const mode = modes.length > 0 ? modes.join(' + ') : 'unconfigured';
     logger.info(`FoundryVTT client initialized (${mode} mode)`);
   }
 
   /**
    * Connects to FoundryVTT.
-   * REST API mode: tests /api/status endpoint.
-   * Socket.IO mode: authenticates and loads full worldData.
+   *
+   * The two transports are additive, not exclusive (see `.env.example`:
+   * `FOUNDRY_API_KEY` is documented as "Optional: Diagnostics... to enable 5
+   * server monitoring tools" — a supplement to Socket.IO, not a replacement
+   * for it). When both are configured:
+   *  - REST (`/api/status`) backs the 5 diagnostics tools.
+   *  - Socket.IO remains the primary transport for everything else (reads
+   *    from cached `worldData`, all WRITE mutations) — `assertWriteable`
+   *    and every `list*`/`get*` accessor need the socket, not the API key.
+   * A REST failure is non-fatal when Socket.IO credentials are also present
+   * (diagnostics tools degrade; the rest of the server still works) — the
+   * reverse is not true, since Socket.IO is what most tools depend on.
    */
   async connect(): Promise<void> {
-    if (this.config.apiKey) {
-      try {
-        await this.http.get('/api/status');
-        this._isConnected = true;
-        logger.info('Connected to FoundryVTT via REST API module');
-      } catch (error) {
-        logger.error('Failed to connect via REST API module:', error);
-        throw error;
-      }
-      return;
-    }
-
     const user = this.config.userId || this.config.username;
-    if (!user || !this.config.password) {
+    const password = this.config.password;
+
+    if (!this.config.apiKey && !(user && password)) {
       throw new Error(
         'Socket.IO mode requires username/userId and password. ' +
           'Set FOUNDRY_USERNAME + FOUNDRY_PASSWORD or FOUNDRY_USER_ID + FOUNDRY_PASSWORD.',
       );
     }
 
-    const { session } = await authenticateFoundry(this.config.baseUrl, user, this.config.password);
+    if (this.config.apiKey) {
+      try {
+        await this.http.get('/api/status');
+        logger.info('Connected to FoundryVTT via REST API module (diagnostics)');
+      } catch (error) {
+        if (!(user && password)) {
+          logger.error('Failed to connect via REST API module:', error);
+          throw error;
+        }
+        logger.warn(
+          'REST API module unreachable — diagnostics tools unavailable; continuing with Socket.IO',
+          { error: error instanceof Error ? error.message : String(error) },
+        );
+      }
+    }
 
-    // Connect authenticated socket and load world data
-    this.worldData = await this.connectAndLoadWorld(session);
-    this.worldDataStale = false;
+    if (user && password) {
+      const { session } = await authenticateFoundry(this.config.baseUrl, user, password);
+
+      // Connect authenticated socket and load world data
+      this.worldData = await this.connectAndLoadWorld(session);
+      this.worldDataStale = false;
+      logger.info('Connected to FoundryVTT via Socket.IO', {
+        actors: this.worldData.actors.length,
+        scenes: this.worldData.scenes.length,
+        items: this.worldData.items.length,
+      });
+    }
+
     this._isConnected = true;
-    logger.info('Connected to FoundryVTT via Socket.IO', {
-      actors: this.worldData.actors.length,
-      scenes: this.worldData.scenes.length,
-      items: this.worldData.items.length,
-    });
   }
 
   /**
@@ -538,10 +788,16 @@ export class FoundryClient {
    * I/O of its own, because this accessor is synchronous and widely called.
    */
   isConnected(): boolean {
+    // A socket, once established, is the more informative signal (reacts to
+    // drops/reconnects immediately — see #217) — prefer it even when an
+    // apiKey is also configured (REST is additive; see `connect()`).
+    if (this.socket) {
+      return this._isConnected && this.socket.connected === true;
+    }
     if (this.config.apiKey) {
       return this._isConnected && this.restLinkLive;
     }
-    return this._isConnected && this.socket?.connected === true;
+    return false;
   }
 
   /**
@@ -551,6 +807,16 @@ export class FoundryClient {
    */
   isWorldDataStale(): boolean {
     return this.worldDataStale;
+  }
+
+  /**
+   * Whether `FOUNDRY_WRITE_ENABLED` is set, without attempting a write.
+   * Lets a caller that batches several writes in one tool call (e.g.
+   * `move_tokens`) fail fast with one clear error instead of repeating
+   * {@link assertWriteable}'s message once per item.
+   */
+  isWriteEnabled(): boolean {
+    return this.config.writeEnabled === true;
   }
 
   /**
@@ -630,7 +896,7 @@ export class FoundryClient {
     }
 
     if (!this.worldData) {
-      return { actors: [], total: 0, page: 1, limit: params.limit || 10 };
+      return { actors: [], total: 0, page: 1, limit: params.limit || 10, nextCursor: null };
     }
 
     let results = this.worldData.actors;
@@ -646,9 +912,12 @@ export class FoundryClient {
 
     const total = results.length;
     const limit = params.limit || 10;
-    const actors: FoundryActor[] = results.slice(0, limit).map(worldActorToFoundry);
+    const offset = decodeCursor(params.cursor);
+    const actors: FoundryActor[] = results.slice(offset, offset + limit).map(worldActorToFoundry);
+    const nextOffset = offset + actors.length;
+    const nextCursor = nextOffset < total ? encodeCursor(nextOffset) : null;
 
-    return { actors, total, page: 1, limit };
+    return { actors, total, page: Math.floor(offset / limit) + 1, limit, nextCursor };
   }
 
   async getActor(actorId: string): Promise<FoundryActor> {
@@ -679,6 +948,25 @@ export class FoundryClient {
    */
   getRawActor(actorId: string): WorldActor | undefined {
     return this.worldData?.actors.find((a) => a._id === actorId);
+  }
+
+  /**
+   * Returns an actor's owned items (equipment, spells, features) from the
+   * cached worldData, with the full `system` payload of each.
+   *
+   * @param actorId - 16-char alphanumeric actor document id
+   * @returns the actor's embedded item documents (empty array if it owns none)
+   * @throws if the actor is not found in the cached world data
+   */
+  getActorItems(actorId: string): WorldItem[] {
+    if (!FOUNDRY_ID_PATTERN.test(actorId)) {
+      throw new Error(`Invalid actorId format: ${actorId}`);
+    }
+    const actor = this.worldData?.actors.find((a) => a._id === actorId);
+    if (!actor) {
+      throw new Error(`Actor not found: ${actorId}`);
+    }
+    return actor.items ?? [];
   }
 
   /**
@@ -743,6 +1031,114 @@ export class FoundryClient {
     return { success: true, updatedAttributes };
   }
 
+  /**
+   * Creates a new top-level Actor document in the world.
+   *
+   * `Actor` is a top-level document (like `JournalEntry`), so the create
+   * carries no `parentUuid`. Use to instantiate a permanent NPC/character
+   * sheet in the sidebar, as opposed to {@link createActorStatusEffect} or
+   * {@link createActorItem} which mutate an *existing* actor.
+   *
+   * @param name - actor display name
+   * @param type - game-system actor type (e.g. "character", "npc")
+   * @param system - optional system-specific data merged into `actor.system`
+   * @param folder - optional 16-char Folder document id to file the actor under
+   * @returns the newly created actor document
+   */
+  async createWorldActor(
+    name: string,
+    type: string,
+    system?: Record<string, unknown>,
+    folder?: string,
+  ): Promise<WorldActor> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (!type || typeof type !== 'string') {
+      throw new Error('type is required and must be a string');
+    }
+    if (folder !== undefined && !FOUNDRY_ID_PATTERN.test(folder)) {
+      throw new Error(`Invalid folder format: ${folder}`);
+    }
+    const data: Record<string, unknown> = { name, type };
+    if (system) {
+      data.system = system;
+    }
+    if (folder) {
+      data.folder = folder;
+    }
+    const result = await this.modifyDocument('Actor', 'create', { data: [data] });
+    return result[0] as WorldActor;
+  }
+
+  /**
+   * Creates a new top-level Actor document AND seeds it with starting items
+   * (skills, gear, weapons, cyberware, …) in one call, instead of a
+   * `create_world_actor` round trip followed by one `create_actor_item` per
+   * item. Pairs with {@link FoundryClient} schema introspection
+   * (`get_document_schema` over the module bridge): call that once per
+   * Actor/Item type to learn the real field names for `system`/item
+   * `system`, then build the whole character in a single `createFullActor`
+   * call.
+   *
+   * Item creation is best-effort per item, not atomic: the actor is always
+   * created first (a failure there aborts the whole call, nothing to
+   * return), but a bad item (e.g. a typo'd `type`) is reported in
+   * `itemErrors` rather than losing the actor or the items that did succeed.
+   *
+   * @param name - actor display name
+   * @param type - game-system actor type (e.g. "character", "npc")
+   * @param options - `system` data, `folder`, and starting `items`
+   * @returns the created actor, every successfully created item, and any
+   *   per-item creation errors
+   */
+  async createFullActor(
+    name: string,
+    type: string,
+    options: {
+      system?: Record<string, unknown>;
+      folder?: string;
+      items?: Array<{ name: string; type: string; system?: Record<string, unknown> }>;
+    } = {},
+  ): Promise<{
+    actor: WorldActor;
+    items: FoundryItem[];
+    itemErrors: Array<{ name: string; error: string }>;
+  }> {
+    const itemSeeds = options.items ?? [];
+    for (const seed of itemSeeds) {
+      if (!seed.name || typeof seed.name !== 'string') {
+        throw new Error('Every item requires a name');
+      }
+      if (!seed.type || typeof seed.type !== 'string') {
+        throw new Error(`Item "${seed.name}" requires a type`);
+      }
+    }
+
+    const actor = await this.createWorldActor(name, type, options.system, options.folder);
+
+    const items: FoundryItem[] = [];
+    const itemErrors: Array<{ name: string; error: string }> = [];
+    for (const seed of itemSeeds) {
+      try {
+        const itemDoc: Partial<FoundryItem> = { type: seed.type, name: seed.name };
+        if (seed.system) {
+          itemDoc.system = seed.system;
+        }
+        const item = await this.createActorItem(actor._id, { type: 'inline', item: itemDoc });
+        items.push(item);
+      } catch (error) {
+        itemErrors.push({
+          name: seed.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return { actor, items, itemErrors };
+  }
+
   // ==========================================================================
   // Item methods
   // ==========================================================================
@@ -756,7 +1152,7 @@ export class FoundryClient {
     }
 
     if (!this.worldData) {
-      return { items: [], total: 0, page: 1, limit: params.limit || 10 };
+      return { items: [], total: 0, page: 1, limit: params.limit || 10, nextCursor: null };
     }
 
     let results = this.worldData.items;
@@ -772,7 +1168,8 @@ export class FoundryClient {
 
     const total = results.length;
     const limit = params.limit || 10;
-    const items = results.slice(0, limit).map((i) => {
+    const offset = decodeCursor(params.cursor);
+    const items = results.slice(offset, offset + limit).map((i) => {
       const item: {
         _id: string;
         name: string;
@@ -788,18 +1185,21 @@ export class FoundryClient {
       if (i.img) {
         item.img = i.img;
       }
-      const desc = extractString(i.system, 'description', 'value');
+      const sys = isRecord(i.system) ? (i.system as Record<string, unknown>) : {};
+      const desc = extractString(sys, 'description', 'value') || extractString(sys, 'description');
       if (desc) {
         item.description = desc;
       }
-      const rar = extractString(i.system, 'rarity');
-      if (rar) {
-        item.rarity = rar;
+      const rarity = extractString(sys, 'rarity');
+      if (rarity) {
+        item.rarity = rarity;
       }
       return item;
     });
+    const nextOffset = offset + items.length;
+    const nextCursor = nextOffset < total ? encodeCursor(nextOffset) : null;
 
-    return { items, total, page: 1, limit };
+    return { items, total, page: Math.floor(offset / limit) + 1, limit, nextCursor };
   }
 
   // ==========================================================================
@@ -920,7 +1320,26 @@ export class FoundryClient {
         `FoundryVTT rejected ${action} ${type}: ${response.error.message || 'unknown error'}`,
       );
     }
-    return Array.isArray(response?.result) ? response.result : [];
+    const result = Array.isArray(response?.result) ? response.result : [];
+    // FoundryVTT does not echo a client's own writes back on the
+    // `modifyDocument` broadcast channel (see world-cache.ts's header
+    // comment) - without this, every write here left `worldData` stale
+    // for the rest of the session until an unrelated broadcast or an
+    // explicit refreshWorldData() resynced it. Applying this response
+    // through the same `applyDocumentBroadcast` broadcasts use is safe
+    // unconditionally: it is idempotent by construction (upserts by _id,
+    // tolerates an already-gone delete id), so if Foundry *does* also
+    // broadcast this write back later, re-applying it is a no-op.
+    if (this.worldData) {
+      const parentUuid = operation.parentUuid;
+      applyDocumentBroadcast(this.worldData, {
+        type,
+        action,
+        result,
+        ...(typeof parentUuid === 'string' && parentUuid ? { parentUuid } : {}),
+      });
+    }
+    return result;
   }
 
   // ==========================================================================
@@ -930,12 +1349,8 @@ export class FoundryClient {
   /**
    * Creates a new item on an actor via the `modifyDocument` socket protocol.
    *
-   * Inline sources are created directly. Compendium sources are NOT yet
-   * supported over Socket.IO — copying a pack entry needs a compendium read
-   * that `modifyDocument` does not provide (tracked in issue #159).
-   *
    * @param actorId - 16-char alphanumeric actor document id
-   * @param source - inline item document (compendium source throws)
+   * @param source - inline item document or compendium source
    * @returns the newly created item document
    */
   async createActorItem(actorId: string, source: ActorItemCreateSource): Promise<FoundryItem> {
@@ -943,14 +1358,9 @@ export class FoundryClient {
     if (!FOUNDRY_ID_PATTERN.test(actorId)) {
       throw new Error(`Invalid actorId format: ${actorId}`);
     }
-    if (source.type === 'compendium') {
-      throw new Error(
-        'Creating an item from a compendium source is not yet supported over Socket.IO; ' +
-          'provide an inline item instead. See issue #159.',
-      );
-    }
+    const itemData = source.type === 'inline' ? source.item : {};
     const result = await this.modifyDocument('Item', 'create', {
-      data: [source.item],
+      data: [itemData],
       parentUuid: `Actor.${actorId}`,
     });
     return result[0] as FoundryItem;
@@ -1196,6 +1606,76 @@ export class FoundryClient {
     }
     const result = await this.modifyDocument('Token', 'update', {
       updates: [{ _id: tokenId, x, y }],
+      parentUuid: `Scene.${sceneId}`,
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
+  }
+
+  /**
+   * Updates a token's vision and/or light emission properties.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param tokenId - 16-char alphanumeric Token document id
+   * @param patch - vision (sight.*) and light (light.*) settings
+   */
+  async updateTokenVision(
+    sceneId: string,
+    tokenId: string,
+    patch: {
+      sightEnabled?: boolean;
+      sightRange?: number;
+      sightAngle?: number;
+      visionMode?: string;
+      lightDim?: number;
+      lightBright?: number;
+      lightColor?: string;
+      lightAngle?: number;
+      lightAnimationType?: string;
+    },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(tokenId)) {
+      throw new Error(`Invalid tokenId format: ${tokenId}`);
+    }
+    if (
+      patch.sightEnabled === undefined &&
+      patch.sightRange === undefined &&
+      patch.sightAngle === undefined &&
+      patch.visionMode === undefined &&
+      patch.lightDim === undefined &&
+      patch.lightBright === undefined &&
+      patch.lightColor === undefined &&
+      patch.lightAngle === undefined &&
+      patch.lightAnimationType === undefined
+    ) {
+      throw new Error('patch is required and must contain at least one vision or light field');
+    }
+    if (patch.lightColor && !HEX_COLOR_PATTERN.test(patch.lightColor)) {
+      throw new Error(`Invalid lightColor format: ${patch.lightColor} — must be a 6-digit hex color`);
+    }
+
+    const update: Record<string, unknown> = { _id: tokenId };
+    let sightEnabled = patch.sightEnabled;
+    if (patch.sightRange !== undefined && patch.sightRange > 0 && sightEnabled === undefined) {
+      sightEnabled = true;
+    }
+    if (sightEnabled !== undefined) update['sight.enabled'] = sightEnabled;
+    if (patch.sightRange !== undefined) update['sight.range'] = patch.sightRange;
+    if (patch.sightAngle !== undefined) update['sight.angle'] = patch.sightAngle;
+    if (patch.visionMode !== undefined) update['sight.visionMode'] = patch.visionMode;
+    if (patch.lightDim !== undefined) update['light.dim'] = patch.lightDim;
+    if (patch.lightBright !== undefined) update['light.bright'] = patch.lightBright;
+    if (patch.lightColor !== undefined) update['light.color'] = patch.lightColor;
+    if (patch.lightAngle !== undefined) update['light.angle'] = patch.lightAngle;
+    if (patch.lightAnimationType !== undefined) update['light.animation.type'] = patch.lightAnimationType;
+
+    const result = await this.modifyDocument('Token', 'update', {
+      updates: [update],
       parentUuid: `Scene.${sceneId}`,
       diff: true,
       recursive: true,
@@ -1481,6 +1961,2272 @@ export class FoundryClient {
   }
 
   // ==========================================================================
+  // Chat mutation methods (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  /**
+   * Posts a message to the FoundryVTT chat log.
+   *
+   * `ChatMessage` is a top-level document, so the create carries no
+   * `parentUuid` (mirrors {@link createJournalEntry}). `style` matches
+   * FoundryVTT's `CONST.CHAT_MESSAGE_STYLES` (0 OTHER, 1 OOC, 2 IC, 3 EMOTE),
+   * confirmed against a live v12 world's raw message documents.
+   *
+   * @param content - message body (HTML or plain text)
+   * @param options - optional display alias, whisper target user ids, and style
+   * @returns the newly created chat message document
+   */
+  async sendChatMessage(
+    content: string,
+    options: { speaker?: string; whisperTo?: string[]; style?: 'ooc' | 'ic' | 'emote' } = {},
+  ): Promise<WorldMessage> {
+    this.assertWriteable();
+    if (!content || typeof content !== 'string') {
+      throw new Error('content is required and must be a string');
+    }
+    const STYLE_CODES: Record<'ooc' | 'ic' | 'emote', number> = { ooc: 1, ic: 2, emote: 3 };
+    const data: Record<string, unknown> = {
+      content,
+      style: options.style ? STYLE_CODES[options.style] : 0,
+    };
+    // `author` has no server-side default (unlike `ownership`/`_stats` on
+    // other document types) and is rejected as undefined without it; the
+    // authenticated user's id rides along on every WorldData snapshot.
+    if (this.worldData?.userId) {
+      data.author = this.worldData.userId;
+    }
+    if (options.speaker) {
+      data.speaker = { alias: options.speaker };
+    }
+    if (options.whisperTo && options.whisperTo.length > 0) {
+      for (const userId of options.whisperTo) {
+        if (!FOUNDRY_ID_PATTERN.test(userId)) {
+          throw new Error(`Invalid whisper target user id format: ${userId}`);
+        }
+      }
+      data.whisper = options.whisperTo;
+    }
+    const result = await this.modifyDocument('ChatMessage', 'create', { data: [data] });
+    return result[0] as WorldMessage;
+  }
+
+  // ==========================================================================
+  // Scene mutation methods (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  /**
+   * Activates a scene, switching every connected client's canvas to it.
+   *
+   * FoundryVTT's server-side `Scene` document enforces "only one active
+   * scene" on its own `_onUpdateDocuments` hook, deactivating any other
+   * active scene as a side effect of this single update — no second write
+   * is needed here.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id to activate
+   * @returns the updated scene document
+   */
+  async switchScene(sceneId: string): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    // Not pre-checked against the cached worldData - Foundry itself is the
+    // source of truth for whether sceneId exists and rejects a truly
+    // missing id; a local check would only risk rejecting something valid,
+    // e.g. a scene another client just created that a broadcast hasn't
+    // reached this connection yet.
+    const result = await this.modifyDocument('Scene', 'update', {
+      updates: [{ _id: sceneId, active: true }],
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
+  }
+
+  // ==========================================================================
+  // Token creation (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  /**
+   * Places a new token for an existing actor onto a scene.
+   *
+   * `Token` is an embedded document of `Scene` (mirrors {@link moveToken}),
+   * so the create carries `parentUuid: "Scene.<sceneId>"`. Base display
+   * fields (texture, size, vision) are seeded from the actor's
+   * `prototypeToken`, then overridden by any explicit `name`/`hidden` argument.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id to place the token on
+   * @param actorId - 16-char alphanumeric Actor document id the token represents
+   * @param x - target x pixel coordinate (finite number)
+   * @param y - target y pixel coordinate (finite number)
+   * @param options - optional display name override and hidden flag
+   * @returns the newly created token document
+   */
+  async spawnToken(
+    sceneId: string,
+    actorId: string,
+    x: number,
+    y: number,
+    options: { name?: string; hidden?: boolean } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(actorId)) {
+      throw new Error(`Invalid actorId format: ${actorId}`);
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — x and y must be finite numbers`);
+    }
+    const actor = this.worldData?.actors.find((a) => a._id === actorId);
+    if (!actor) {
+      throw new Error(`Actor not found: ${actorId}`);
+    }
+    // sceneId is not pre-checked against the cached worldData, for the same
+    // reason as switchScene above: Foundry itself validates it and rejects
+    // a truly missing id.
+    const proto: Record<string, unknown> = isRecord(actor.prototypeToken)
+      ? { ...actor.prototypeToken }
+      : {};
+    delete proto._id;
+    const tokenData: Record<string, unknown> = {
+      ...proto,
+      actorId,
+      x,
+      y,
+      name: options.name ?? actor.name,
+    };
+    if (options.hidden !== undefined) {
+      tokenData.hidden = options.hidden;
+    }
+    const result = await this.modifyDocument('Token', 'create', {
+      data: [tokenData],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  /**
+   * Removes a token from a scene.
+   *
+   * `Token` is an embedded document of `Scene` (mirrors {@link spawnToken}),
+   * so the delete carries `parentUuid: "Scene.<sceneId>"`. Does not touch the
+   * underlying Actor document — only the placed token is removed.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id the token is on
+   * @param tokenId - 16-char alphanumeric Token document id to remove
+   */
+  async deleteToken(sceneId: string, tokenId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(tokenId)) {
+      throw new Error(`Invalid tokenId format: ${tokenId}`);
+    }
+    await this.modifyDocument('Token', 'delete', {
+      ids: [tokenId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  /**
+   * Permanently deletes a top-level Actor document (mirrors {@link createWorldActor}).
+   *
+   * @param actorId - 16-char alphanumeric Actor document id to delete
+   */
+  async deleteWorldActor(actorId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(actorId)) {
+      throw new Error(`Invalid actorId format: ${actorId}`);
+    }
+    await this.modifyDocument('Actor', 'delete', { ids: [actorId] });
+  }
+
+  /**
+   * Permanently deletes a Scene document (mirrors {@link switchScene}).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id to delete
+   */
+  async deleteScene(sceneId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    await this.modifyDocument('Scene', 'delete', { ids: [sceneId] });
+  }
+
+  /**
+   * Permanently deletes a JournalEntry document (mirrors {@link createJournalEntry}).
+   *
+   * @param journalId - 16-char alphanumeric JournalEntry document id to delete
+   */
+  async deleteJournalEntry(journalId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(journalId)) {
+      throw new Error(`Invalid journalId format: ${journalId}`);
+    }
+    await this.modifyDocument('JournalEntry', 'delete', { ids: [journalId] });
+  }
+
+  // ==========================================================================
+  // Roll tables (read + local weighted draw)
+  // ==========================================================================
+
+  /**
+   * Returns the world's RollTable documents (raw — no dedicated WorldRollTable
+   * type; shape varies by table but always carries `name`, `formula`, and
+   * `results` with a `range` per entry).
+   */
+  getRollTables(): Array<Record<string, unknown>> {
+    return this.worldData?.tables ?? [];
+  }
+
+  /**
+   * Draws a result from a RollTable by id.
+   *
+   * Rolls the table's own `formula` (falling back to a uniform 1..max(range)
+   * draw when the table has none), then returns the result whose `range`
+   * contains the roll. This is a local, read-only draw: unlike FoundryVTT's
+   * own `RollTable#draw`, it does not mark the result `drawn` or respect a
+   * "no duplicates" replacement setting — repeat draws can repeat a result.
+   *
+   * @param tableId - 16-char alphanumeric RollTable document id
+   * @returns the table name, the numeric roll, and the matched result (or
+   *   null if no result's range covers the roll — an incompletely configured table)
+   */
+  rollOnTable(tableId: string): {
+    table: string;
+    roll: number;
+    result: Record<string, unknown> | null;
+  } {
+    if (!FOUNDRY_ID_PATTERN.test(tableId)) {
+      throw new Error(`Invalid tableId format: ${tableId}`);
+    }
+    const table = this.getRollTables().find((t) => t._id === tableId);
+    if (!table) {
+      throw new Error(`Roll table not found: ${tableId}`);
+    }
+    const results = Array.isArray(table.results)
+      ? (table.results as Array<Record<string, unknown>>)
+      : [];
+    if (results.length === 0) {
+      throw new Error(`Roll table has no results: ${tableId}`);
+    }
+    const formula = typeof table.formula === 'string' ? table.formula : '';
+    let roll: number;
+    if (formula) {
+      roll = evaluateDiceFormula(formula).total;
+    } else {
+      const maxRange = Math.max(
+        ...results.map((r) => (Array.isArray(r.range) ? Number(r.range[1]) : 0)),
+      );
+      roll = Math.floor(Math.random() * Math.max(maxRange, 1)) + 1;
+    }
+    const result =
+      results.find((r) => {
+        if (!Array.isArray(r.range)) {
+          return false;
+        }
+        const [min, max] = r.range;
+        return roll >= Number(min) && roll <= Number(max);
+      }) ?? null;
+    return { table: typeof table.name === 'string' ? table.name : tableId, roll, result };
+  }
+
+  // ==========================================================================
+  // RollTable mutation methods (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  async createRollTable(
+    name: string,
+    results: Array<{ text: string; weight?: number; range?: [number, number] }>,
+    options: {
+      description?: string;
+      formula?: string;
+      replacement?: boolean;
+      displayRoll?: boolean;
+      folder?: string;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (!Array.isArray(results) || results.length === 0) {
+      throw new Error('results is required and must be a non-empty array');
+    }
+    if (options.folder !== undefined && !FOUNDRY_ID_PATTERN.test(options.folder)) {
+      throw new Error(`Invalid folder format: ${options.folder}`);
+    }
+
+    const hasRange = results.some((r) => r.range !== undefined);
+    const allHaveRange = results.every((r) => r.range !== undefined);
+    if (hasRange && !allHaveRange) {
+      throw new Error(
+        'Provide range on every result or on none — mixing explicit and auto-assigned ranges produces gaps',
+      );
+    }
+
+    for (const [i, r] of results.entries()) {
+      if (!r.text || typeof r.text !== 'string') {
+        throw new Error(`results[${i}].text is required and must be a string`);
+      }
+      if (r.weight !== undefined && (!Number.isInteger(r.weight) || r.weight <= 0)) {
+        throw new Error(`results[${i}].weight must be a positive integer`);
+      }
+      if (allHaveRange) {
+        if (
+          !Array.isArray(r.range) ||
+          r.range.length !== 2 ||
+          !Number.isInteger(r.range[0]) ||
+          !Number.isInteger(r.range[1]) ||
+          (r.range[1] as number) < (r.range[0] as number)
+        ) {
+          throw new Error(`results[${i}].range must be a length-2 array of ascending integers`);
+        }
+      }
+    }
+
+    const formula = options.formula ?? (allHaveRange ? '' : `1d${results.length}`);
+    const tableData: Record<string, unknown> = {
+      name,
+      formula,
+      replacement: options.replacement ?? true,
+      displayRoll: options.displayRoll ?? true,
+    };
+    if (options.description) tableData.description = options.description;
+    if (options.folder) tableData.folder = options.folder;
+
+    const created = await this.modifyDocument('RollTable', 'create', { data: [tableData] });
+    const tableId = (created[0] as { _id?: string })?._id;
+    if (tableId) {
+      const resultDocs = results.map((r, i) => ({
+        type: 'text',
+        text: r.text,
+        weight: r.weight ?? 1,
+        range: r.range ?? [i + 1, i + 1],
+      }));
+      await this.modifyDocument('TableResult', 'create', {
+        data: resultDocs,
+        parentUuid: `RollTable.${tableId}`,
+      });
+    }
+    return created[0];
+  }
+
+  async deleteRollTable(tableId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(tableId)) {
+      throw new Error(`Invalid tableId format: ${tableId}`);
+    }
+    await this.modifyDocument('RollTable', 'delete', { ids: [tableId] });
+  }
+
+  // ==========================================================================
+  // Folder methods
+  // ==========================================================================
+
+  listFolders(options: { type?: string } = {}): WorldFolderEntry[] {
+    const folders = this.worldData?.folders ?? [];
+    let filtered = folders;
+    if (options.type) {
+      const q = options.type.toLowerCase();
+      filtered = filtered.filter((f) => typeof f.type === 'string' && f.type.toLowerCase() === q);
+    }
+    return filtered.map((f) => ({
+      id: typeof f._id === 'string' ? f._id : '',
+      name: typeof f.name === 'string' ? f.name : '',
+      type: typeof f.type === 'string' ? f.type : '',
+      parent: typeof f.folder === 'string' ? f.folder : null,
+      color: typeof f.color === 'string' ? f.color : null,
+    }));
+  }
+
+  async createFolder(
+    name: string,
+    type: string,
+    options: { parent?: string; color?: string; sorting?: 'a' | 'm' } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (!type || typeof type !== 'string') {
+      throw new Error('type is required and must be a string');
+    }
+    if (!FOLDER_DOCUMENT_TYPES.includes(type as (typeof FOLDER_DOCUMENT_TYPES)[number])) {
+      throw new Error(
+        `Invalid folder type: "${type}". Valid types are: ${FOLDER_DOCUMENT_TYPES.join(', ')}`,
+      );
+    }
+    if (options.parent) {
+      if (!FOUNDRY_ID_PATTERN.test(options.parent)) {
+        throw new Error(`Invalid parent folder id format: ${options.parent}`);
+      }
+      const parentExists = this.worldData?.folders.some((f) => f._id === options.parent);
+      if (!parentExists) {
+        throw new Error(`Folder not found: ${options.parent}`);
+      }
+    }
+    if (options.color && !HEX_COLOR_PATTERN.test(options.color)) {
+      throw new Error(`Invalid color format: ${options.color} — must be a 6-digit hex color`);
+    }
+
+    const data: Record<string, unknown> = {
+      name,
+      type,
+      sorting: options.sorting ?? 'a',
+    };
+    if (options.parent) data.folder = options.parent;
+    if (options.color) data.color = options.color;
+
+    const result = await this.modifyDocument('Folder', 'create', { data: [data] });
+    return result[0];
+  }
+
+  // ==========================================================================
+  // Macro methods
+  // ==========================================================================
+
+  listMacros(): WorldMacroEntry[] {
+    const macros = this.worldData?.macros ?? [];
+    return macros.map((m) => {
+      const cmd = typeof m.command === 'string' ? m.command : '';
+      const preview = cmd.slice(0, 200).replace(/\r?\n/g, ' ');
+      return {
+        id: typeof m._id === 'string' ? m._id : '',
+        name: typeof m.name === 'string' ? m.name : '',
+        type: typeof m.type === 'string' ? m.type : 'chat',
+        scope: typeof m.scope === 'string' ? m.scope : 'global',
+        folder: typeof m.folder === 'string' ? m.folder : null,
+        commandPreview: preview,
+      };
+    });
+  }
+
+  async createMacro(
+    name: string,
+    type: 'script' | 'chat',
+    command: string,
+    options: { img?: string; folder?: string; scope?: 'global' | 'actors' | 'actor' } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (type !== 'script' && type !== 'chat') {
+      throw new Error('Invalid macro type: must be "script" or "chat"');
+    }
+    if (typeof command !== 'string') {
+      throw new Error('command is required and must be a string');
+    }
+    if (options.folder !== undefined && !FOUNDRY_ID_PATTERN.test(options.folder)) {
+      throw new Error(`Invalid folder format: ${options.folder}`);
+    }
+
+    const data: Record<string, unknown> = {
+      name,
+      type,
+      command,
+      author: this.worldData?.userId,
+      scope: options.scope ?? 'global',
+    };
+    if (options.img) data.img = options.img;
+    if (options.folder) data.folder = options.folder;
+
+    const result = await this.modifyDocument('Macro', 'create', { data: [data] });
+    return result[0];
+  }
+
+  async deleteMacro(macroId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(macroId)) {
+      throw new Error(`Invalid macroId format: ${macroId}`);
+    }
+    await this.modifyDocument('Macro', 'delete', { ids: [macroId] });
+  }
+
+  // ==========================================================================
+  // Playlist methods
+  // ==========================================================================
+
+  listPlaylists(): WorldPlaylistEntry[] {
+    const playlists = this.worldData?.playlists ?? [];
+    return playlists.map((p) => {
+      const sounds = Array.isArray(p.sounds) ? (p.sounds as Array<Record<string, unknown>>) : [];
+      return {
+        id: typeof p._id === 'string' ? p._id : '',
+        name: typeof p.name === 'string' ? p.name : '',
+        playing: p.playing === true,
+        mode: typeof p.mode === 'number' ? p.mode : 0,
+        channel: typeof p.channel === 'string' ? p.channel : 'music',
+        soundCount: sounds.length,
+        sounds: sounds.map((s) => ({
+          id: typeof s._id === 'string' ? s._id : '',
+          name: typeof s.name === 'string' ? s.name : '',
+          path: typeof s.path === 'string' ? s.path : '',
+          playing: s.playing === true,
+          volume: typeof s.volume === 'number' ? s.volume : 0.5,
+        })),
+      };
+    });
+  }
+
+  async createPlaylist(
+    name: string,
+    options: {
+      description?: string;
+      mode?: -1 | 0 | 1 | 2;
+      channel?: 'music' | 'environment' | 'interface';
+      fade?: number;
+      folder?: string;
+      sounds?: Array<{ name: string; path: string; volume?: number; repeat?: boolean }>;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (options.mode !== undefined && ![-1, 0, 1, 2].includes(options.mode)) {
+      throw new Error('Invalid playlist mode: must be -1 (disabled), 0 (sequential), 1 (shuffle), or 2 (simultaneous)');
+    }
+    if (options.channel && !['music', 'environment', 'interface'].includes(options.channel)) {
+      throw new Error('Invalid audio channel: must be "music", "environment", or "interface"');
+    }
+    if (options.folder !== undefined && !FOUNDRY_ID_PATTERN.test(options.folder)) {
+      throw new Error(`Invalid folder format: ${options.folder}`);
+    }
+
+    const data: Record<string, unknown> = {
+      name,
+      mode: options.mode ?? 0,
+      channel: options.channel ?? 'music',
+    };
+    if (options.description) data.description = options.description;
+    if (options.fade !== undefined) data.fade = options.fade;
+    if (options.folder) data.folder = options.folder;
+
+    const created = await this.modifyDocument('Playlist', 'create', { data: [data] });
+    const playlistId = (created[0] as { _id?: string })?._id;
+
+    if (options.sounds && options.sounds.length > 0 && playlistId) {
+      for (const [i, s] of options.sounds.entries()) {
+        if (!s.name || typeof s.name !== 'string') {
+          throw new Error(`sounds[${i}].name is required and must be a string`);
+        }
+        if (!s.path || typeof s.path !== 'string') {
+          throw new Error(`sounds[${i}].path is required and must be a string`);
+        }
+      }
+      const soundDocs = options.sounds.map((s) => ({
+        name: s.name,
+        path: s.path,
+        volume: s.volume ?? 0.5,
+        repeat: s.repeat ?? false,
+      }));
+      await this.modifyDocument('PlaylistSound', 'create', {
+        data: soundDocs,
+        parentUuid: `Playlist.${playlistId}`,
+      });
+    }
+    return created[0];
+  }
+
+  async setPlaylistState(
+    playlistId: string,
+    playing: boolean,
+    options: { soundId?: string } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(playlistId)) {
+      throw new Error(`Invalid playlistId format: ${playlistId}`);
+    }
+    if (options.soundId) {
+      if (!FOUNDRY_ID_PATTERN.test(options.soundId)) {
+        throw new Error(`Invalid soundId format: ${options.soundId}`);
+      }
+      const playlist = this.worldData?.playlists.find((p) => p._id === playlistId);
+      const soundExists = Array.isArray(playlist?.sounds) &&
+        (playlist?.sounds as Array<Record<string, unknown>>).some((s) => s._id === options.soundId);
+      if (!soundExists) {
+        throw new Error(`Sound not found on playlist: ${options.soundId}`);
+      }
+      const result = await this.modifyDocument('PlaylistSound', 'update', {
+        updates: [{ _id: options.soundId, playing }],
+        parentUuid: `Playlist.${playlistId}`,
+        diff: true,
+      });
+      return result[0];
+    }
+
+    const result = await this.modifyDocument('Playlist', 'update', {
+      updates: [{ _id: playlistId, playing }],
+      diff: true,
+    });
+    return result[0];
+  }
+
+  async deletePlaylist(playlistId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(playlistId)) {
+      throw new Error(`Invalid playlistId format: ${playlistId}`);
+    }
+    await this.modifyDocument('Playlist', 'delete', { ids: [playlistId] });
+  }
+
+  // ==========================================================================
+  // World settings methods
+  // ==========================================================================
+
+  /**
+   * Reads a world setting by key (e.g. "cyberpunk-red-core.customSetting").
+   */
+  getWorldSetting(key: string): {
+    key: string;
+    value: unknown;
+    exists: boolean;
+    raw: string | null;
+  } {
+    if (!key || typeof key !== 'string') {
+      throw new Error('key is required and must be a string');
+    }
+    const settings = this.worldData?.settings ?? [];
+    const setting = settings.find((s) => s.key === key);
+    if (!setting) {
+      return { key, value: undefined, exists: false, raw: null };
+    }
+    const raw = typeof setting.value === 'string' ? setting.value : JSON.stringify(setting.value);
+    let parsed: unknown = raw;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = setting.value;
+    }
+    return { key, value: parsed, exists: true, raw };
+  }
+
+  /**
+   * Sets a world setting by key (system or module settings only; core.* is refused).
+   */
+  async setWorldSetting(
+    key: string,
+    value: unknown,
+  ): Promise<{ key: string; value: unknown; previous: unknown; created: boolean }> {
+    this.assertWriteable();
+    if (!key || typeof key !== 'string') {
+      throw new Error('key is required and must be a string');
+    }
+    const parts = key.split('.');
+    if (parts.length < 2 || parts.some((p) => p.length === 0)) {
+      throw new Error(`Invalid setting key: "${key}" — must have format {scope}.{field} (e.g. "system-name.settingKey")`);
+    }
+    if (parts[0] === 'core') {
+      throw new Error(
+        'Refusing to write a core.* setting — those control the FoundryVTT client itself and a wrong value can break the world. Change core settings in the Foundry UI.',
+      );
+    }
+
+    const existing = this.worldData?.settings.find((s) => s.key === key);
+    let previous: unknown = undefined;
+    if (existing) {
+      const raw = typeof existing.value === 'string' ? existing.value : JSON.stringify(existing.value);
+      try {
+        previous = JSON.parse(raw);
+      } catch {
+        previous = existing.value;
+      }
+    }
+
+    const serializedValue = JSON.stringify(value);
+
+    if (existing && existing._id) {
+      await this.modifyDocument('Setting', 'update', {
+        updates: [{ _id: existing._id, value: serializedValue }],
+        diff: true,
+      });
+      return { key, value, previous, created: false };
+    }
+
+    await this.modifyDocument('Setting', 'create', {
+      data: [{ key, value: serializedValue }],
+    });
+    return { key, value, previous: undefined, created: true };
+  }
+
+  // ==========================================================================
+  // Wall / door mutation methods (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  /**
+   * Locates a wall (and the scene it lives on) in the cached worldData.
+   * Mirrors {@link findToken}.
+   */
+  findWall(
+    wallId: string,
+    sceneId?: string,
+  ): { scene: WorldScene; wall: Record<string, unknown> } | null {
+    if (!this.worldData) {
+      return null;
+    }
+    const scenes = sceneId
+      ? this.worldData.scenes.filter((s) => s._id === sceneId)
+      : this.worldData.scenes;
+    for (const scene of scenes) {
+      const wall = scene.walls?.find((w) => (w as { _id?: string })._id === wallId);
+      if (wall) {
+        return { scene, wall };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Sets a door's state. `Wall` is an embedded document of `Scene`, and `ds`
+   * ("door state") is a plain field on it — 0 closed, 1 open, 2 locked — so
+   * this is a standard `modifyDocument` update, the same as {@link moveToken}.
+   * No canvas access is required; FoundryVTT's server enforces the field
+   * only applies when the wall is actually a door (`wall.door !== 0`).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id the wall is on
+   * @param wallId - 16-char alphanumeric Wall document id
+   * @param state - 0 (closed), 1 (open), or 2 (locked)
+   */
+  async setDoorState(sceneId: string, wallId: string, state: 0 | 1 | 2): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(wallId)) {
+      throw new Error(`Invalid wallId format: ${wallId}`);
+    }
+    if (state !== 0 && state !== 1 && state !== 2) {
+      throw new Error(`Invalid door state: ${state}. Must be 0 (closed), 1 (open), or 2 (locked)`);
+    }
+    const result = await this.modifyDocument('Wall', 'update', {
+      updates: [{ _id: wallId, ds: state }],
+      parentUuid: `Scene.${sceneId}`,
+      diff: true,
+    });
+    return result[0];
+  }
+
+  // ==========================================================================
+  // Scene lighting mutation methods (WRITE — Socket.IO modifyDocument)
+  // ==========================================================================
+
+  /**
+   * Sets a scene's ambient darkness level and/or global illumination fields.
+   * All three are plain top-level fields on the `Scene` document (mirrors
+   * {@link switchScene}) — no canvas access required.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param options - at least one of darkness (0-1), globalLight, globalLightThreshold
+   */
+  async setSceneLighting(
+    sceneId: string,
+    options: { darkness?: number; globalLight?: boolean; globalLightThreshold?: number },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (
+      options.darkness !== undefined &&
+      (!Number.isFinite(options.darkness) || options.darkness < 0 || options.darkness > 1)
+    ) {
+      throw new Error(`Invalid darkness: ${options.darkness} (must be a number between 0 and 1)`);
+    }
+    const update: Record<string, unknown> = { _id: sceneId };
+    if (options.darkness !== undefined) {
+      update.darkness = options.darkness;
+    }
+    if (options.globalLight !== undefined) {
+      update.globalLight = options.globalLight;
+    }
+    if (options.globalLightThreshold !== undefined) {
+      update.globalLightThreshold = options.globalLightThreshold;
+    }
+    if (Object.keys(update).length === 1) {
+      throw new Error('At least one of darkness, globalLight, globalLightThreshold is required');
+    }
+    const result = await this.modifyDocument('Scene', 'update', {
+      updates: [update],
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
+  }
+
+  /**
+   * Resets fog of war exploration for a scene via the socket resetFog event.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   */
+  async resetFog(sceneId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    this.socket?.emit('resetFog', sceneId);
+  }
+
+  // ==========================================================================
+  // Wall-aware token pathfinding (WRITE — Socket.IO modifyDocument)
+  //
+  // Pure geometry over the cached `Scene.walls` array — no canvas, no PIXI.
+  // The A* search and segment-intersection collision check are ported from
+  // alexivenkov/foundry-api-bridge-module (MIT), GridPathfinder.ts +
+  // DoorAwareCollision.ts, with the module's "ask the real canvas collision
+  // backend first" step removed: headless, we have no canvas, so the ported
+  // wall-segment check is the *only* collision source (see the module-scope
+  // `path*` helpers below the class). That means this catches ordinary walls
+  // and doors but not anything canvas-only would also enforce (terrain
+  // height, drawings-as-obstacles, etc.) — a real map with only geometric
+  // walls behaves the same; an unusual one may not.
+  // ==========================================================================
+
+  /**
+   * Moves a token to (x, y), routing around impassable walls when the direct
+   * line is blocked, and — unless `openDoors` is false — opening any closed,
+   * non-locked doors the route needs to pass through along the way (each
+   * open is its own `setDoorState` write, with a short delay so connected
+   * clients see the door open before the token continues).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id the token is on
+   * @param tokenId - 16-char alphanumeric Token document id to move
+   * @param x - target x pixel coordinate
+   * @param y - target y pixel coordinate
+   * @param options - `openDoors` (default true)
+   * @returns the waypoints taken, any doors opened, whether no route was
+   *   found (`blocked`), and the final token document
+   */
+  async moveTokenPathfind(
+    sceneId: string,
+    tokenId: string,
+    x: number,
+    y: number,
+    options: { openDoors?: boolean } = {},
+  ): Promise<{
+    path: Array<{ x: number; y: number }>;
+    doorsOpened: string[];
+    blocked: boolean;
+    final: unknown;
+  }> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(tokenId)) {
+      throw new Error(`Invalid tokenId format: ${tokenId}`);
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — x and y must be finite numbers`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const token = scene.tokens?.find((t) => (t as { _id?: string })._id === tokenId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!token) {
+      throw new Error(`Token not found: ${tokenId} on scene ${sceneId}`);
+    }
+
+    const gridSize = extractGridSize(scene);
+    const startX = Number(token.x ?? 0);
+    const startY = Number(token.y ?? 0);
+    const tokenW = Number(token.width ?? 1) || 1;
+    const tokenH = Number(token.height ?? 1) || 1;
+    const openDoors = options.openDoors !== false;
+
+    const wallInfos = extractWallInfos(scene);
+    const openableDoors = wallInfos.filter((w) => w.door === 1 && w.ds === 0 && w.move !== 0);
+    const impassableWalls = wallInfos.filter((w) => {
+      if (w.move === 0) {
+        return false;
+      }
+      if (w.door === 1 && w.ds === 0 && openDoors) {
+        return false; // closed door we're willing to open — treat as passable
+      }
+      if (w.door === 1 && w.ds === 1) {
+        return false; // already open
+      }
+      return true;
+    });
+
+    const directBlocked = isDirectPathBlocked(
+      startX,
+      startY,
+      x,
+      y,
+      tokenW,
+      tokenH,
+      gridSize,
+      impassableWalls,
+    );
+
+    let waypoints: Array<{ x: number; y: number }>;
+    if (!directBlocked) {
+      waypoints = [{ x, y }];
+    } else {
+      const pathResult = findGridTokenPath(
+        startX,
+        startY,
+        x,
+        y,
+        gridSize,
+        tokenW,
+        tokenH,
+        impassableWalls,
+      );
+      if (!pathResult || pathResult.path.length === 0) {
+        return { path: [], doorsOpened: [], blocked: true, final: null };
+      }
+      // The A* search operates on grid cells, so pathResult.path's final
+      // waypoint is the destination cell's top-left corner, not the exact
+      // requested (x, y). Swap it in - the point is inside the same,
+      // already-verified-reachable cell, so the token lands precisely
+      // where asked instead of snapping to the nearest grid line.
+      waypoints = [...pathResult.path.slice(0, -1), { x, y }];
+    }
+
+    const doorsOnPath = openDoors
+      ? findDoorsOnPath(startX, startY, gridSize, waypoints, openableDoors)
+      : [];
+
+    const doorsOpened: string[] = [];
+    let final: unknown = null;
+    for (let i = 0; i < waypoints.length; i++) {
+      const waypoint = waypoints[i];
+      if (!waypoint) {
+        continue;
+      }
+      for (const door of doorsOnPath.filter((d) => d.betweenIndex === i)) {
+        await this.setDoorState(sceneId, door.wallId, 1);
+        doorsOpened.push(door.wallId);
+        await pathDelay(400);
+      }
+      const result = await this.modifyDocument('Token', 'update', {
+        updates: [{ _id: tokenId, x: waypoint.x, y: waypoint.y }],
+        parentUuid: `Scene.${sceneId}`,
+        diff: true,
+      });
+      final = result[0];
+    }
+
+    return { path: waypoints, doorsOpened, blocked: false, final };
+  }
+
+  // ==========================================================================
+  // Scene & tile creation (WRITE — Socket.IO modifyDocument)
+  //
+  // Lets a scene be assembled and decorated entirely from cached/local data
+  // — no browser tab, no visual-placement guesswork. `createScene`/
+  // `createTile` read real pixel dimensions off disk when FOUNDRY_DATA_PATH
+  // is configured ({@link getImageSize}), and `findOpenCells` reuses the
+  // same wall-segment geometry {@link moveTokenPathfind} uses so placement
+  // can avoid walls without a screenshot.
+  // ==========================================================================
+
+  /**
+   * Resolves a Data-relative asset path (e.g. "assets/cyberpunk/maps/v1/x.jpg")
+   * against the configured `dataPath`, guarding against path traversal
+   * outside the Data directory. Throws if `dataPath` is not configured —
+   * every caller needs it for the same reason (reading a real file).
+   */
+  private resolveDataPath(relativeSrc: string): string {
+    if (!this.config.dataPath) {
+      throw new Error(
+        'FOUNDRY_DATA_PATH is not configured — set it to the FoundryVTT Data directory ' +
+          '(enables reading image dimensions from disk; only possible when this server runs ' +
+          'on the same host as FoundryVTT).',
+      );
+    }
+    const base = pathResolve(this.config.dataPath);
+    const resolved = pathResolve(base, relativeSrc);
+    if (resolved !== base && !resolved.startsWith(base + pathSep)) {
+      throw new Error(`Path escapes the Data directory: ${relativeSrc}`);
+    }
+    return resolved;
+  }
+
+  /**
+   * Reads an asset's real pixel dimensions from disk via {@link resolveDataPath}
+   * + {@link getImageSize}, throwing a caller-actionable error rather than
+   * silently falling back to a guess — a wrong width/height would otherwise
+   * misalign the grid or tile silently.
+   */
+  private requireImageSize(relativeSrc: string): ImageSize {
+    const absolutePath = this.resolveDataPath(relativeSrc);
+    const size = getImageSize(absolutePath);
+    if (!size) {
+      throw new Error(
+        `Could not read image dimensions for "${relativeSrc}" — pass width/height explicitly, ` +
+          'or verify the file exists under FOUNDRY_DATA_PATH and is a PNG/JPEG/WebP.',
+      );
+    }
+    return size;
+  }
+
+  /**
+   * Creates a new Scene document from a background image already present
+   * under FoundryVTT's `Data` directory. Width/height default to the
+   * image's real pixel dimensions (read from disk via FOUNDRY_DATA_PATH)
+   * when not given explicitly — the single biggest source of a misaligned
+   * grid when scenes are built by hand.
+   *
+   * @param name - Scene display name
+   * @param backgroundSrc - Data-relative path to the background image (e.g. "assets/cyberpunk/maps/v1/x.jpg")
+   * @param options - grid size/type/distance/units, padding, explicit width/height, activate-on-create
+   * @returns the newly created scene document
+   */
+  async createScene(
+    name: string,
+    backgroundSrc: string,
+    options: {
+      width?: number;
+      height?: number;
+      gridSize?: number;
+      gridType?: number;
+      gridDistance?: number;
+      gridUnits?: string;
+      padding?: number;
+      backgroundColor?: string;
+      activate?: boolean;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!name || typeof name !== 'string') {
+      throw new Error('name is required and must be a string');
+    }
+    if (!backgroundSrc || typeof backgroundSrc !== 'string') {
+      throw new Error('backgroundSrc is required and must be a string');
+    }
+
+    const size =
+      options.width !== undefined && options.height !== undefined
+        ? { width: options.width, height: options.height }
+        : this.requireImageSize(backgroundSrc);
+    const width = options.width ?? size.width;
+    const height = options.height ?? size.height;
+
+    const data: Record<string, unknown> = {
+      name,
+      background: { src: backgroundSrc },
+      width,
+      height,
+      padding: options.padding ?? 0.25,
+      backgroundColor: options.backgroundColor ?? '#999999',
+      grid: {
+        type: options.gridType ?? 1,
+        size: options.gridSize ?? 100,
+        distance: options.gridDistance ?? 1,
+        units: options.gridUnits ?? 'ft',
+      },
+    };
+
+    const result = await this.modifyDocument('Scene', 'create', { data: [data] });
+    const created = result[0] as { _id?: string } | undefined;
+    if (options.activate && created?._id) {
+      await this.switchScene(created._id);
+    }
+    return created;
+  }
+
+  /**
+   * Places a decorative Tile on a scene from an image already present under
+   * FoundryVTT's `Data` directory. Width/height default to the image's real
+   * pixel dimensions when not given. Position is either explicit pixel
+   * `x`/`y` (top-left corner) or a `gridCol`/`gridRow` cell (the tile is
+   * centred in that cell).
+   *
+   * By default refuses to place a tile whose bounding box crosses a scene
+   * wall (the same wall-segment geometry {@link moveTokenPathfind} uses) —
+   * pass `allowWallOverlap: true` to place anyway (e.g. a wall-mounted prop
+   * that is meant to straddle a wall).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param src - Data-relative path to the tile image
+   * @param options - position (x/y or gridCol/gridRow), size, rotation, elevation, hidden, allowWallOverlap
+   * @returns the newly created tile document
+   */
+  async createTile(
+    sceneId: string,
+    src: string,
+    options: {
+      x?: number;
+      y?: number;
+      gridCol?: number;
+      gridRow?: number;
+      width?: number;
+      height?: number;
+      rotation?: number;
+      elevation?: number;
+      hidden?: boolean;
+      allowWallOverlap?: boolean;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!src || typeof src !== 'string') {
+      throw new Error('src is required and must be a string');
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    const size =
+      options.width !== undefined && options.height !== undefined
+        ? { width: options.width, height: options.height }
+        : this.requireImageSize(src);
+    const width = options.width ?? size.width;
+    const height = options.height ?? size.height;
+
+    let x: number;
+    let y: number;
+    if (options.x !== undefined && options.y !== undefined) {
+      x = options.x;
+      y = options.y;
+    } else if (options.gridCol !== undefined && options.gridRow !== undefined) {
+      const gridSize = extractGridSize(scene);
+      x = options.gridCol * gridSize + gridSize / 2 - width / 2;
+      y = options.gridRow * gridSize + gridSize / 2 - height / 2;
+    } else {
+      throw new Error('Either x/y or gridCol/gridRow is required to position the tile');
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — x and y must be finite numbers`);
+    }
+
+    if (!options.allowWallOverlap) {
+      const rect: PathRect = { x, y, width, height };
+      const blocking = extractWallInfos(scene).find((w) => {
+        const [p1, p2] = pathWallSegment(w);
+        return rectIntersectsSegment(rect, p1, p2);
+      });
+      if (blocking) {
+        throw new Error(
+          `Tile placement at (${x}, ${y}) size ${width}x${height} crosses wall ${blocking.id}. ` +
+            'Pick an open cell (see find_open_cells), or pass allowWallOverlap: true to place anyway.',
+        );
+      }
+    }
+
+    const tileData: Record<string, unknown> = {
+      texture: { src },
+      x,
+      y,
+      width,
+      height,
+      rotation: options.rotation ?? 0,
+      elevation: options.elevation ?? 0,
+      hidden: options.hidden ?? false,
+    };
+
+    const result = await this.modifyDocument('Tile', 'create', {
+      data: [tileData],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  /**
+   * Removes a Tile from a scene (mirrors {@link deleteToken}).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param tileId - 16-char alphanumeric Tile document id
+   */
+  async deleteTile(sceneId: string, tileId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(tileId)) {
+      throw new Error(`Invalid tileId format: ${tileId}`);
+    }
+    await this.modifyDocument('Tile', 'delete', {
+      ids: [tileId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  /**
+   * Lists the Tiles placed on a scene, read from the cached worldData
+   * snapshot — no network round trip. Lets a caller check current
+   * decoration state without a `capture_scene` screenshot.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   */
+  listTiles(sceneId: string): Array<{
+    id: string;
+    src: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+    hidden: boolean;
+  }> {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const tiles = Array.isArray(scene.tiles) ? scene.tiles : [];
+    return tiles.map((t) => {
+      const rec = t as Record<string, unknown>;
+      const texture = isRecord(rec.texture) ? rec.texture : undefined;
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        src: texture && typeof texture.src === 'string' ? texture.src : '',
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        width: typeof rec.width === 'number' ? rec.width : 0,
+        height: typeof rec.height === 'number' ? rec.height : 0,
+        rotation: typeof rec.rotation === 'number' ? rec.rotation : 0,
+        hidden: rec.hidden === true,
+      };
+    });
+  }
+
+  /**
+   * Scans a scene's grid for cells with no wall crossing them and no
+   * existing tile/token already centred there — a placement candidate list
+   * for `create_tile`/`spawn_token` that needs no screenshot to compute.
+   * Restricted to the background image's own extent (`0..width`,
+   * `0..height`); the scene's `padding` margin around it is never floor.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param options - `limit` (default 50) caps how many open cells are returned
+   */
+  findOpenCells(
+    sceneId: string,
+    options: { limit?: number } = {},
+  ): Array<{ col: number; row: number; x: number; y: number }> {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const gridSize = extractGridSize(scene);
+    const cols = Math.ceil(scene.width / gridSize);
+    const rows = Math.ceil(scene.height / gridSize);
+    const impassableWalls = extractWallInfos(scene).filter(
+      (w) => w.move !== 0 && !(w.door === 1 && w.ds === 1),
+    );
+
+    const occupiedCenters: Array<{ x: number; y: number }> = [
+      ...(Array.isArray(scene.tiles) ? scene.tiles : []),
+      ...(Array.isArray(scene.tokens) ? scene.tokens : []),
+    ].map((d) => {
+      const rec = d as Record<string, unknown>;
+      const w = typeof rec.width === 'number' ? rec.width : gridSize;
+      const h = typeof rec.height === 'number' ? rec.height : gridSize;
+      const px = typeof rec.x === 'number' ? rec.x : 0;
+      const py = typeof rec.y === 'number' ? rec.y : 0;
+      return { x: px + w / 2, y: py + h / 2 };
+    });
+
+    const limit = options.limit ?? 50;
+    const open: Array<{ col: number; row: number; x: number; y: number }> = [];
+    for (let row = 0; row < rows && open.length < limit; row++) {
+      for (let col = 0; col < cols && open.length < limit; col++) {
+        const rect: PathRect = {
+          x: col * gridSize,
+          y: row * gridSize,
+          width: gridSize,
+          height: gridSize,
+        };
+        const blockedByWall = impassableWalls.some((w) => {
+          const [p1, p2] = pathWallSegment(w);
+          return rectIntersectsSegment(rect, p1, p2);
+        });
+        if (blockedByWall) {
+          continue;
+        }
+        const occupied = occupiedCenters.some(
+          (o) =>
+            o.x >= rect.x && o.x < rect.x + gridSize && o.y >= rect.y && o.y < rect.y + gridSize,
+        );
+        if (occupied) {
+          continue;
+        }
+        open.push({ col, row, x: rect.x + gridSize / 2, y: rect.y + gridSize / 2 });
+      }
+    }
+    return open;
+  }
+
+  /**
+   * Lists image assets under a folder of FoundryVTT's `Data` directory —
+   * map backgrounds, prop/token art, etc. — with real pixel dimensions and
+   * any `[Tag, Tag]`-bracketed keyword tags parsed out of the filename (the
+   * naming convention several battlemap packs use). Requires FOUNDRY_DATA_PATH.
+   *
+   * @param subdir - Data-relative folder to scan (default "assets")
+   * @param options - `query` filters by filename/tag substring (case-insensitive); `limit` caps results (default 200)
+   */
+  listSceneAssets(
+    subdir = 'assets',
+    options: { query?: string; limit?: number; kind?: 'image' | 'audio' } = {},
+  ): Array<{ path: string; name: string; tags: string[]; width: number; height: number }> {
+    const dataPath = this.config.dataPath;
+    const root = this.resolveDataPath(subdir);
+    const limit = options.limit ?? 200;
+    const query = options.query?.toLowerCase();
+    const isAudio = options.kind === 'audio';
+    const pattern = isAudio ? AUDIO_EXTENSION_PATTERN : IMAGE_EXTENSION_PATTERN;
+    const results: Array<{
+      path: string;
+      name: string;
+      tags: string[];
+      width: number;
+      height: number;
+    }> = [];
+
+    const walk = (dir: string): void => {
+      if (results.length >= limit) {
+        return;
+      }
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (results.length >= limit) {
+          return;
+        }
+        const full = pathJoin(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!pattern.test(entry.name)) {
+          continue;
+        }
+        const tagMatch = entry.name.match(/\[([^\]]+)\]/);
+        const tags = tagMatch
+          ? (tagMatch[1] as string)
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)
+          : [];
+        const name = entry.name
+          .replace(/\.[^.]+$/, '')
+          .replace(/\s*\[[^\]]+\]\s*$/, '')
+          .trim();
+        if (query) {
+          const haystack = `${entry.name} ${tags.join(' ')}`.toLowerCase();
+          if (!haystack.includes(query)) {
+            continue;
+          }
+        }
+        const size = isAudio ? null : getImageSize(full);
+        const relative = pathRelative(dataPath as string, full)
+          .split(pathSep)
+          .join('/');
+        results.push({
+          path: relative,
+          name,
+          tags,
+          width: size?.width ?? 0,
+          height: size?.height ?? 0,
+        });
+      }
+    };
+    walk(root);
+    return results;
+  }
+
+  // ==========================================================================
+  // Wall creation (WRITE — Socket.IO modifyDocument)
+  //
+  // Complements moveTokenPathfind/createTile's wall-awareness: lets a scene's
+  // physical layout (rooms, doors, windows) be built without canvas
+  // drag-drawing. Walls connect grid *vertices* (intersections), not cell
+  // centres like tiles/tokens — placement takes fromCol/fromRow -> toCol/
+  // toRow (or explicit pixel x1/y1/x2/y2) rather than a single cell.
+  // ==========================================================================
+
+  /**
+   * Creates a new Wall segment on a scene. Endpoints are either explicit
+   * pixel coordinates (x1/y1/x2/y2) or grid vertices (fromCol/fromRow ->
+   * toCol/toRow, snapped to the scene's grid size — e.g. fromCol:3,
+   * fromRow:5 -> toCol:4,toRow:5 is the one-cell-long top edge of cell
+   * (3,5)). `type` selects a door/secretDoor/window preset (see
+   * {@link WALL_TYPE_PRESETS}); a plain "wall" (default) is otherwise left
+   * at Foundry's own Wall schema defaults (blocks movement and sight).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param options - endpoints plus `type` (default "wall")
+   * @returns the newly created wall document
+   */
+  async createWall(
+    sceneId: string,
+    options: {
+      x1?: number;
+      y1?: number;
+      x2?: number;
+      y2?: number;
+      fromCol?: number;
+      fromRow?: number;
+      toCol?: number;
+      toRow?: number;
+      type?: WallType;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    let x1: number;
+    let y1: number;
+    let x2: number;
+    let y2: number;
+    if (
+      options.x1 !== undefined &&
+      options.y1 !== undefined &&
+      options.x2 !== undefined &&
+      options.y2 !== undefined
+    ) {
+      ({ x1, y1, x2, y2 } = options);
+    } else if (
+      options.fromCol !== undefined &&
+      options.fromRow !== undefined &&
+      options.toCol !== undefined &&
+      options.toRow !== undefined
+    ) {
+      const gridSize = extractGridSize(scene);
+      x1 = options.fromCol * gridSize;
+      y1 = options.fromRow * gridSize;
+      x2 = options.toCol * gridSize;
+      y2 = options.toRow * gridSize;
+    } else {
+      throw new Error(
+        'Either x1/y1/x2/y2 or fromCol/fromRow/toCol/toRow is required to place the wall',
+      );
+    }
+    if (![x1, y1, x2, y2].every((n) => Number.isFinite(n))) {
+      throw new Error(`Invalid coordinates: (${x1}, ${y1}) -> (${x2}, ${y2})`);
+    }
+    if (x1 === x2 && y1 === y2) {
+      throw new Error('Wall endpoints must differ — a zero-length wall is not valid');
+    }
+
+    const type = options.type ?? 'wall';
+    const preset = WALL_TYPE_PRESETS[type];
+    if (!preset) {
+      throw new Error(
+        `Invalid wall type: ${type}. Must be wall, door, secretDoor, terrain, invisible, or ethereal`,
+      );
+    }
+
+    const wallData: Record<string, unknown> = { c: [x1, y1, x2, y2], ...preset };
+
+    const result = await this.modifyDocument('Wall', 'create', {
+      data: [wallData],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  /**
+   * Removes a Wall from a scene (mirrors {@link deleteTile}).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   * @param wallId - 16-char alphanumeric Wall document id
+   */
+  async deleteWall(sceneId: string, wallId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(wallId)) {
+      throw new Error(`Invalid wallId format: ${wallId}`);
+    }
+    await this.modifyDocument('Wall', 'delete', {
+      ids: [wallId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  /**
+   * Lists the Walls on a scene, read from the cached worldData snapshot —
+   * no network round trip. Lets a caller find a wallId for delete_wall/
+   * set_door_state without guessing (mirrors {@link listTiles}).
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   */
+  listWalls(sceneId: string): Array<{
+    id: string;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    move: number;
+    sight: number;
+    door: number;
+    ds: number;
+  }> {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const walls = Array.isArray(scene.walls) ? scene.walls : [];
+    return walls.map((w) => {
+      const rec = w as Record<string, unknown>;
+      const c = Array.isArray(rec.c) ? (rec.c as number[]) : [0, 0, 0, 0];
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        x1: c[0] ?? 0,
+        y1: c[1] ?? 0,
+        x2: c[2] ?? 0,
+        y2: c[3] ?? 0,
+        move: typeof rec.move === 'number' ? rec.move : 1,
+        sight: typeof rec.sight === 'number' ? rec.sight : 1,
+        door: typeof rec.door === 'number' ? rec.door : 0,
+        ds: typeof rec.ds === 'number' ? rec.ds : 0,
+      };
+    });
+  }
+
+  /**
+   * Lists the Tokens placed on a scene, read from the cached worldData
+   * snapshot - no network round trip. Mirrors {@link listTiles}/
+   * {@link listWalls}. Answers "what's on the canvas and where" without a
+   * `capture_scene` screenshot or asking the user.
+   *
+   * @param sceneId - 16-char alphanumeric Scene document id
+   */
+  listTokens(sceneId: string): SceneToken[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const tokens = Array.isArray(scene.tokens) ? scene.tokens : [];
+    return tokens.map((t) => {
+      const rec = t as Record<string, unknown>;
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        name: typeof rec.name === 'string' ? rec.name : '',
+        actorId: typeof rec.actorId === 'string' ? rec.actorId : null,
+        actorLink: rec.actorLink === true,
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        width: typeof rec.width === 'number' ? rec.width : 1,
+        height: typeof rec.height === 'number' ? rec.height : 1,
+        elevation: typeof rec.elevation === 'number' ? rec.elevation : 0,
+        rotation: typeof rec.rotation === 'number' ? rec.rotation : 0,
+        hidden: rec.hidden === true,
+        disposition: typeof rec.disposition === 'number' ? rec.disposition : 0,
+      };
+    });
+  }
+
+  // ==========================================================================
+  // AmbientLight methods
+  // ==========================================================================
+
+  listLights(sceneId: string): SceneLight[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const lights = Array.isArray(scene.lights) ? scene.lights : [];
+    return lights.map((l) => {
+      const rec = l as Record<string, unknown>;
+      const config = isRecord(rec.config) ? (rec.config as Record<string, unknown>) : {};
+      const anim = isRecord(config.animation) ? (config.animation as Record<string, unknown>) : {};
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        rotation: typeof rec.rotation === 'number' ? rec.rotation : 0,
+        walls: rec.walls !== false,
+        vision: rec.vision === true,
+        hidden: rec.hidden === true,
+        dim: typeof config.dim === 'number' ? config.dim : 0,
+        bright: typeof config.bright === 'number' ? config.bright : 0,
+        color: typeof config.color === 'string' ? config.color : null,
+        angle: typeof config.angle === 'number' ? config.angle : 360,
+        animationType: typeof anim.type === 'string' ? anim.type : null,
+      };
+    });
+  }
+
+  async createLight(
+    sceneId: string,
+    options: {
+      x?: number;
+      y?: number;
+      gridCol?: number;
+      gridRow?: number;
+      dim?: number;
+      bright?: number;
+      color?: string;
+      angle?: number;
+      rotation?: number;
+      animationType?: string;
+      animationSpeed?: number;
+      animationIntensity?: number;
+      walls?: boolean;
+      vision?: boolean;
+      hidden?: boolean;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    let x: number;
+    let y: number;
+    if (options.gridCol !== undefined && options.gridRow !== undefined) {
+      const gridSize = extractGridSize(scene);
+      x = options.gridCol * gridSize + gridSize / 2;
+      y = options.gridRow * gridSize + gridSize / 2;
+    } else if (options.x !== undefined && options.y !== undefined) {
+      x = options.x;
+      y = options.y;
+    } else {
+      throw new Error('Either x/y or gridCol/gridRow is required to place the light');
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — must be finite numbers`);
+    }
+
+    if (options.color && !HEX_COLOR_PATTERN.test(options.color)) {
+      throw new Error(`Invalid color format: ${options.color} — must be a 6-digit hex color (e.g. #ff8800)`);
+    }
+
+    const lightConfig: Record<string, unknown> = {
+      dim: options.dim ?? 0,
+      bright: options.bright ?? 0,
+      angle: options.angle ?? 360,
+    };
+    if (options.color) {
+      lightConfig.color = options.color;
+    }
+    if (options.animationType !== undefined) {
+      lightConfig.animation = {
+        type: options.animationType,
+        speed: options.animationSpeed ?? 5,
+        intensity: options.animationIntensity ?? 5,
+      };
+    }
+
+    const data: Record<string, unknown> = {
+      x,
+      y,
+      rotation: options.rotation ?? 0,
+      walls: options.walls ?? true,
+      vision: options.vision ?? false,
+      hidden: options.hidden ?? false,
+      config: lightConfig,
+    };
+
+    const result = await this.modifyDocument('AmbientLight', 'create', {
+      data: [data],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async updateLight(
+    sceneId: string,
+    lightId: string,
+    patch: {
+      x?: number;
+      y?: number;
+      dim?: number;
+      bright?: number;
+      color?: string;
+      angle?: number;
+      rotation?: number;
+      walls?: boolean;
+      vision?: boolean;
+      hidden?: boolean;
+    },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(lightId)) {
+      throw new Error(`Invalid lightId format: ${lightId}`);
+    }
+    if (patch.color && !HEX_COLOR_PATTERN.test(patch.color)) {
+      throw new Error(`Invalid color format: ${patch.color} — must be a 6-digit hex color (e.g. #ff8800)`);
+    }
+
+    const update: Record<string, unknown> = { _id: lightId };
+    if (patch.x !== undefined) update.x = patch.x;
+    if (patch.y !== undefined) update.y = patch.y;
+    if (patch.rotation !== undefined) update.rotation = patch.rotation;
+    if (patch.walls !== undefined) update.walls = patch.walls;
+    if (patch.vision !== undefined) update.vision = patch.vision;
+    if (patch.hidden !== undefined) update.hidden = patch.hidden;
+    if (patch.dim !== undefined) update['config.dim'] = patch.dim;
+    if (patch.bright !== undefined) update['config.bright'] = patch.bright;
+    if (patch.color !== undefined) update['config.color'] = patch.color;
+    if (patch.angle !== undefined) update['config.angle'] = patch.angle;
+
+    const result = await this.modifyDocument('AmbientLight', 'update', {
+      updates: [update],
+      parentUuid: `Scene.${sceneId}`,
+      diff: true,
+      recursive: true,
+    });
+    return result[0];
+  }
+
+  async deleteLight(sceneId: string, lightId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(lightId)) {
+      throw new Error(`Invalid lightId format: ${lightId}`);
+    }
+    await this.modifyDocument('AmbientLight', 'delete', {
+      ids: [lightId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
+  // AmbientSound methods
+  // ==========================================================================
+
+  listSounds(sceneId: string): SceneSound[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const sounds = Array.isArray(scene.sounds) ? scene.sounds : [];
+    return sounds.map((s) => {
+      const rec = s as Record<string, unknown>;
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        radius: typeof rec.radius === 'number' ? rec.radius : 0,
+        path: typeof rec.path === 'string' ? rec.path : '',
+        repeat: rec.repeat === true,
+        volume: typeof rec.volume === 'number' ? rec.volume : 0.5,
+        walls: rec.walls !== false,
+        easing: rec.easing !== false,
+        hidden: rec.hidden === true,
+      };
+    });
+  }
+
+  async createSound(
+    sceneId: string,
+    path: string,
+    options: {
+      x?: number;
+      y?: number;
+      gridCol?: number;
+      gridRow?: number;
+      radius?: number;
+      volume?: number;
+      repeat?: boolean;
+      walls?: boolean;
+      easing?: boolean;
+      hidden?: boolean;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!path || typeof path !== 'string') {
+      throw new Error('path is required and must be a string');
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    let x: number;
+    let y: number;
+    if (options.gridCol !== undefined && options.gridRow !== undefined) {
+      const gridSize = extractGridSize(scene);
+      x = options.gridCol * gridSize + gridSize / 2;
+      y = options.gridRow * gridSize + gridSize / 2;
+    } else if (options.x !== undefined && options.y !== undefined) {
+      x = options.x;
+      y = options.y;
+    } else {
+      throw new Error('Either x/y or gridCol/gridRow is required to place the sound');
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — must be finite numbers`);
+    }
+
+    const data: Record<string, unknown> = {
+      x,
+      y,
+      path,
+      radius: options.radius ?? 0,
+      volume: options.volume ?? 0.5,
+      repeat: options.repeat ?? false,
+      walls: options.walls ?? true,
+      easing: options.easing ?? true,
+      hidden: options.hidden ?? false,
+    };
+
+    const result = await this.modifyDocument('AmbientSound', 'create', {
+      data: [data],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async deleteSound(sceneId: string, soundId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(soundId)) {
+      throw new Error(`Invalid soundId format: ${soundId}`);
+    }
+    await this.modifyDocument('AmbientSound', 'delete', {
+      ids: [soundId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
+  // Note methods
+  // ==========================================================================
+
+  listNotes(sceneId: string): SceneNote[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const notes = Array.isArray(scene.notes) ? scene.notes : [];
+    return notes.map((n) => {
+      const rec = n as Record<string, unknown>;
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        entryId: typeof rec.entryId === 'string' ? rec.entryId : null,
+        pageId: typeof rec.pageId === 'string' ? rec.pageId : null,
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        text: typeof rec.text === 'string' ? rec.text : '',
+        iconSize: typeof rec.iconSize === 'number' ? rec.iconSize : 40,
+        fontSize: typeof rec.fontSize === 'number' ? rec.fontSize : 32,
+        textAnchor: typeof rec.textAnchor === 'number' ? rec.textAnchor : 1,
+        global: rec.global === true,
+      };
+    });
+  }
+
+  async createNote(
+    sceneId: string,
+    options: {
+      entryId?: string;
+      pageId?: string;
+      x?: number;
+      y?: number;
+      gridCol?: number;
+      gridRow?: number;
+      text?: string;
+      iconSize?: number;
+      fontSize?: number;
+      textAnchor?: number;
+      global?: boolean;
+    } = {},
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!options.entryId && !options.text) {
+      throw new Error('A note needs entryId (a journal entry to link) or text (a standalone label), or both');
+    }
+    if (options.entryId) {
+      if (!FOUNDRY_ID_PATTERN.test(options.entryId)) {
+        throw new Error(`Invalid entryId format: ${options.entryId}`);
+      }
+      const journalExists = this.worldData?.journal.some((j) => j._id === options.entryId);
+      if (!journalExists) {
+        throw new Error(`Journal entry not found: ${options.entryId}`);
+      }
+    }
+    if (options.iconSize !== undefined && options.iconSize < 32) {
+      throw new Error('iconSize must be an integer greater than or equal to 32');
+    }
+
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    let x: number;
+    let y: number;
+    if (options.gridCol !== undefined && options.gridRow !== undefined) {
+      const gridSize = extractGridSize(scene);
+      x = options.gridCol * gridSize + gridSize / 2;
+      y = options.gridRow * gridSize + gridSize / 2;
+    } else if (options.x !== undefined && options.y !== undefined) {
+      x = options.x;
+      y = options.y;
+    } else {
+      throw new Error('Either x/y or gridCol/gridRow is required to place the note');
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — must be finite numbers`);
+    }
+
+    const data: Record<string, unknown> = {
+      x,
+      y,
+      iconSize: options.iconSize ?? 40,
+      fontSize: options.fontSize ?? 32,
+      textAnchor: options.textAnchor ?? 1,
+      global: options.global ?? false,
+    };
+    if (options.entryId) data.entryId = options.entryId;
+    if (options.pageId) data.pageId = options.pageId;
+    if (options.text !== undefined) data.text = options.text;
+
+    const result = await this.modifyDocument('Note', 'create', {
+      data: [data],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async deleteNote(sceneId: string, noteId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(noteId)) {
+      throw new Error(`Invalid noteId format: ${noteId}`);
+    }
+    await this.modifyDocument('Note', 'delete', {
+      ids: [noteId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
+  // Drawing methods
+  // ==========================================================================
+
+  listDrawings(sceneId: string): SceneDrawing[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const drawings = Array.isArray(scene.drawings) ? scene.drawings : [];
+    return drawings.map((d) => {
+      const rec = d as Record<string, unknown>;
+      const shape = isRecord(rec.shape) ? (rec.shape as Record<string, unknown>) : {};
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        shapeType: typeof shape.type === 'string' ? shape.type : 'r',
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        width: typeof shape.width === 'number' ? shape.width : null,
+        height: typeof shape.height === 'number' ? shape.height : null,
+        radius: typeof shape.radius === 'number' ? shape.radius : null,
+        points: Array.isArray(shape.points) ? (shape.points as number[]) : [],
+        rotation: typeof rec.rotation === 'number' ? rec.rotation : 0,
+        strokeColor: typeof rec.strokeColor === 'string' ? rec.strokeColor : null,
+        fillType: typeof rec.fillType === 'number' ? rec.fillType : 0,
+        fillColor: typeof rec.fillColor === 'string' ? rec.fillColor : null,
+        text: typeof rec.text === 'string' ? rec.text : '',
+        fontSize: typeof rec.fontSize === 'number' ? rec.fontSize : 48,
+        hidden: rec.hidden === true,
+        locked: rec.locked === true,
+      };
+    });
+  }
+
+  async createDrawing(
+    sceneId: string,
+    options: {
+      shape?: 'r' | 'c' | 'e' | 'p';
+      x: number;
+      y: number;
+      width?: number;
+      height?: number;
+      radius?: number;
+      points?: number[];
+      rotation?: number;
+      strokeColor?: string;
+      strokeWidth?: number;
+      fillType?: 0 | 1 | 2;
+      fillColor?: string;
+      fillAlpha?: number;
+      text?: string;
+      fontSize?: number;
+      hidden?: boolean;
+      locked?: boolean;
+    },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (typeof options.x !== 'number' || !Number.isFinite(options.x) || typeof options.y !== 'number' || !Number.isFinite(options.y)) {
+      throw new Error(`Invalid coordinates: (${options.x}, ${options.y}) — must be finite numbers`);
+    }
+
+    const shapeType = options.shape ?? 'r';
+    const shapeData: Record<string, unknown> = { type: shapeType };
+
+    if (shapeType === 'r' || shapeType === 'e') {
+      if (options.width === undefined || options.height === undefined) {
+        throw new Error('width and height are required for rectangle/ellipse shapes');
+      }
+      shapeData.width = options.width;
+      shapeData.height = options.height;
+    } else if (shapeType === 'c') {
+      if (options.radius === undefined || options.radius <= 0) {
+        throw new Error('radius (positive number) is required for circle shape');
+      }
+      shapeData.radius = options.radius;
+    } else if (shapeType === 'p') {
+      if (!Array.isArray(options.points) || options.points.length < 6 || options.points.length % 2 !== 0) {
+        throw new Error('points array with at least 6 coordinates (3 vertex pairs) is required for polygon shape');
+      }
+      shapeData.points = options.points;
+    } else {
+      throw new Error(`Invalid shape type: ${shapeType} — must be r (rectangle), c (circle), e (ellipse), or p (polygon)`);
+    }
+
+    if (options.strokeColor && !HEX_COLOR_PATTERN.test(options.strokeColor)) {
+      throw new Error(`Invalid strokeColor format: ${options.strokeColor} — must be a 6-digit hex color`);
+    }
+    if (options.fillColor && !HEX_COLOR_PATTERN.test(options.fillColor)) {
+      throw new Error(`Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`);
+    }
+
+    let fillType = options.fillType ?? 0;
+    if (options.fillColor && options.fillType === undefined) {
+      fillType = 1; // Solid fill if color provided
+    }
+
+    const data: Record<string, unknown> = {
+      x: options.x,
+      y: options.y,
+      shape: shapeData,
+      author: this.worldData?.userId,
+      rotation: options.rotation ?? 0,
+      fillType,
+      strokeWidth: options.strokeWidth ?? 8,
+      fontSize: options.fontSize ?? 48,
+      hidden: options.hidden ?? false,
+      locked: options.locked ?? false,
+    };
+    if (options.fillColor) data.fillColor = options.fillColor;
+    if (options.fillAlpha !== undefined) data.fillAlpha = options.fillAlpha;
+    if (options.strokeColor) data.strokeColor = options.strokeColor;
+    if (options.text !== undefined) data.text = options.text;
+
+    const result = await this.modifyDocument('Drawing', 'create', {
+      data: [data],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async deleteDrawing(sceneId: string, drawingId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(drawingId)) {
+      throw new Error(`Invalid drawingId format: ${drawingId}`);
+    }
+    await this.modifyDocument('Drawing', 'delete', {
+      ids: [drawingId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
+  // MeasuredTemplate methods
+  // ==========================================================================
+
+  listTemplates(sceneId: string): SceneTemplate[] {
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+    const templates = Array.isArray(scene.templates) ? scene.templates : [];
+    return templates.map((t) => {
+      const rec = t as Record<string, unknown>;
+      return {
+        id: typeof rec._id === 'string' ? rec._id : '',
+        t: typeof rec.t === 'string' ? rec.t : 'circle',
+        x: typeof rec.x === 'number' ? rec.x : 0,
+        y: typeof rec.y === 'number' ? rec.y : 0,
+        distance: typeof rec.distance === 'number' ? rec.distance : 0,
+        direction: typeof rec.direction === 'number' ? rec.direction : 0,
+        angle: typeof rec.angle === 'number' ? rec.angle : 0,
+        width: typeof rec.width === 'number' ? rec.width : 0,
+        borderColor: typeof rec.borderColor === 'string' ? rec.borderColor : null,
+        fillColor: typeof rec.fillColor === 'string' ? rec.fillColor : null,
+        hidden: rec.hidden === true,
+      };
+    });
+  }
+
+  async createTemplate(
+    sceneId: string,
+    options: {
+      t?: 'circle' | 'cone' | 'rect' | 'ray';
+      x?: number;
+      y?: number;
+      gridCol?: number;
+      gridRow?: number;
+      distance: number;
+      direction?: number;
+      angle?: number;
+      width?: number;
+      borderColor?: string;
+      fillColor?: string;
+      hidden?: boolean;
+    },
+  ): Promise<unknown> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (typeof options.distance !== 'number' || !Number.isFinite(options.distance) || options.distance < 0) {
+      throw new Error('distance is required and must be a finite non-negative number');
+    }
+    const scene = this.worldData?.scenes.find((s) => s._id === sceneId);
+    if (!scene) {
+      throw new Error(`Scene not found: ${sceneId}`);
+    }
+
+    let x: number;
+    let y: number;
+    if (options.gridCol !== undefined && options.gridRow !== undefined) {
+      const gridSize = extractGridSize(scene);
+      x = options.gridCol * gridSize + gridSize / 2;
+      y = options.gridRow * gridSize + gridSize / 2;
+    } else if (options.x !== undefined && options.y !== undefined) {
+      x = options.x;
+      y = options.y;
+    } else {
+      throw new Error('Either x/y or gridCol/gridRow is required to place the template');
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`Invalid coordinates: (${x}, ${y}) — must be finite numbers`);
+    }
+
+    const t = options.t ?? 'circle';
+    if (t === 'cone') {
+      if (options.direction === undefined || options.angle === undefined) {
+        throw new Error('distance, direction, and angle are required for cone templates');
+      }
+    } else if (t === 'ray') {
+      if (options.direction === undefined || options.width === undefined) {
+        throw new Error('distance, direction, and width are required for ray templates');
+      }
+    } else if (t === 'rect') {
+      if (options.direction === undefined) {
+        throw new Error('distance and direction are required for rectangle templates');
+      }
+    } else if (t !== 'circle') {
+      throw new Error(`Invalid template type: ${t} — must be circle, cone, rect, or ray`);
+    }
+
+    if (options.borderColor && !HEX_COLOR_PATTERN.test(options.borderColor)) {
+      throw new Error(`Invalid borderColor format: ${options.borderColor} — must be a 6-digit hex color`);
+    }
+    if (options.fillColor && !HEX_COLOR_PATTERN.test(options.fillColor)) {
+      throw new Error(`Invalid fillColor format: ${options.fillColor} — must be a 6-digit hex color`);
+    }
+
+    const data: Record<string, unknown> = {
+      t,
+      x,
+      y,
+      distance: options.distance,
+      direction: options.direction ?? 0,
+      angle: options.angle ?? 0,
+      width: options.width ?? 0,
+      author: this.worldData?.userId,
+      hidden: options.hidden ?? false,
+    };
+    if (options.borderColor) data.borderColor = options.borderColor;
+    if (options.fillColor) data.fillColor = options.fillColor;
+
+    const result = await this.modifyDocument('MeasuredTemplate', 'create', {
+      data: [data],
+      parentUuid: `Scene.${sceneId}`,
+    });
+    return result[0];
+  }
+
+  async deleteTemplate(sceneId: string, templateId: string): Promise<void> {
+    this.assertWriteable();
+    if (!FOUNDRY_ID_PATTERN.test(sceneId)) {
+      throw new Error(`Invalid sceneId format: ${sceneId}`);
+    }
+    if (!FOUNDRY_ID_PATTERN.test(templateId)) {
+      throw new Error(`Invalid templateId format: ${templateId}`);
+    }
+    await this.modifyDocument('MeasuredTemplate', 'delete', {
+      ids: [templateId],
+      parentUuid: `Scene.${sceneId}`,
+    });
+  }
+
+  // ==========================================================================
   // Cross-collection search
   // ==========================================================================
 
@@ -1695,6 +4441,380 @@ export class FoundryClient {
 }
 
 // ============================================================================
+// Wall-aware pathfinding — pure geometry, no canvas (see moveTokenPathfind)
+//
+// Ported from alexivenkov/foundry-api-bridge-module (MIT license):
+// GridPathfinder.ts (A* search) + DoorAwareCollision.ts (segment-intersection
+// wall collision), adapted to run headless against the plain wall records
+// already cached in WorldScene.walls instead of Foundry's client-side
+// ClockwiseSweepPolygon collision backend.
+// ============================================================================
+
+interface PathPoint {
+  x: number;
+  y: number;
+}
+
+interface PathWallInfo {
+  id: string;
+  c: number[];
+  door: number;
+  ds: number;
+  move: number;
+}
+
+interface PathDoorCrossing {
+  wallId: string;
+  betweenIndex: number;
+}
+
+/**
+ * Resolves after `ms` milliseconds.
+ *
+ * Plain executor deliberately, not `Promise.withResolvers` — this project's
+ * `engines` requires Node 18+, which predates that API (Node 22+/ES2024).
+ */
+function pathDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractGridSize(scene: WorldScene): number {
+  const grid = scene.grid;
+  const size = isRecord(grid) ? grid.size : undefined;
+  return typeof size === 'number' && size > 0 ? size : 100;
+}
+
+function extractWallInfos(scene: WorldScene): PathWallInfo[] {
+  const walls = Array.isArray(scene.walls) ? scene.walls : [];
+  return walls.map((w) => {
+    const rec = w as Record<string, unknown>;
+    return {
+      id: typeof rec._id === 'string' ? rec._id : '',
+      c: Array.isArray(rec.c) ? (rec.c as number[]) : [0, 0, 0, 0],
+      door: typeof rec.door === 'number' ? rec.door : 0,
+      ds: typeof rec.ds === 'number' ? rec.ds : 0,
+      move: typeof rec.move === 'number' ? rec.move : 1,
+    };
+  });
+}
+
+function pathDirection(a: PathPoint, b: PathPoint, c: PathPoint): number {
+  return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
+}
+
+function pathSegmentsIntersect(
+  p1: PathPoint,
+  p2: PathPoint,
+  p3: PathPoint,
+  p4: PathPoint,
+): boolean {
+  const d1 = pathDirection(p3, p4, p1);
+  const d2 = pathDirection(p3, p4, p2);
+  const d3 = pathDirection(p1, p2, p3);
+  const d4 = pathDirection(p1, p2, p4);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+function onPathSegment(p: PathPoint, q: PathPoint, r: PathPoint): boolean {
+  return (
+    r.x <= Math.max(p.x, q.x) &&
+    r.x >= Math.min(p.x, q.x) &&
+    r.y <= Math.max(p.y, q.y) &&
+    r.y >= Math.min(p.y, q.y)
+  );
+}
+
+function pathSegmentsIntersectRelaxed(
+  p1: PathPoint,
+  p2: PathPoint,
+  p3: PathPoint,
+  p4: PathPoint,
+): boolean {
+  const d1 = pathDirection(p3, p4, p1);
+  const d2 = pathDirection(p3, p4, p2);
+  const d3 = pathDirection(p1, p2, p3);
+  const d4 = pathDirection(p1, p2, p4);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true;
+  }
+  if (d1 === 0 && onPathSegment(p3, p4, p1)) {
+    return true;
+  }
+  if (d2 === 0 && onPathSegment(p3, p4, p2)) {
+    return true;
+  }
+  if (d3 === 0 && onPathSegment(p1, p2, p3)) {
+    return true;
+  }
+  if (d4 === 0 && onPathSegment(p1, p2, p4)) {
+    return true;
+  }
+  return false;
+}
+
+function pathWallSegment(wall: PathWallInfo): [PathPoint, PathPoint] {
+  return [
+    { x: wall.c[0] ?? 0, y: wall.c[1] ?? 0 },
+    { x: wall.c[2] ?? 0, y: wall.c[3] ?? 0 },
+  ];
+}
+
+interface PathRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function pointInRect(p: PathPoint, rect: PathRect): boolean {
+  return (
+    p.x >= rect.x && p.x <= rect.x + rect.width && p.y >= rect.y && p.y <= rect.y + rect.height
+  );
+}
+
+/**
+ * True if the segment `p1`-`p2` crosses, touches, or is fully contained by
+ * `rect` — used to test whether a tile's bounding box overlaps a wall.
+ * Checked against all 4 rect edges (catches a crossing/touching segment)
+ * plus an endpoint-in-rect check (catches a segment fully inside the rect,
+ * which would not intersect any edge).
+ */
+function rectIntersectsSegment(rect: PathRect, p1: PathPoint, p2: PathPoint): boolean {
+  if (pointInRect(p1, rect) || pointInRect(p2, rect)) {
+    return true;
+  }
+  const corners: PathPoint[] = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const a = corners[i] as PathPoint;
+    const b = corners[(i + 1) % 4] as PathPoint;
+    if (pathSegmentsIntersectRelaxed(p1, p2, a, b)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** True if the straight pixel-space line from `from` to `to` crosses any impassable wall. */
+function isDirectPathBlocked(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  tokenW: number,
+  tokenH: number,
+  gridSize: number,
+  impassableWalls: PathWallInfo[],
+): boolean {
+  for (let i = 0; i < tokenW; i++) {
+    for (let j = 0; j < tokenH; j++) {
+      const origin = {
+        x: fromX + i * gridSize + gridSize / 2,
+        y: fromY + j * gridSize + gridSize / 2,
+      };
+      const dest = { x: toX + i * gridSize + gridSize / 2, y: toY + j * gridSize + gridSize / 2 };
+      for (const wall of impassableWalls) {
+        const [p3, p4] = pathWallSegment(wall);
+        if (pathSegmentsIntersect(origin, dest, p3, p4)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/** Same check in grid-cell space, used by the A* neighbor expansion below. */
+function isCellBlocked(
+  fromGX: number,
+  fromGY: number,
+  toGX: number,
+  toGY: number,
+  gridSize: number,
+  tokenW: number,
+  tokenH: number,
+  impassableWalls: PathWallInfo[],
+): boolean {
+  const center = (g: number): number => g * gridSize + gridSize / 2;
+  for (let i = 0; i < tokenW; i++) {
+    for (let j = 0; j < tokenH; j++) {
+      const origin = { x: center(fromGX + i), y: center(fromGY + j) };
+      const dest = { x: center(toGX + i), y: center(toGY + j) };
+      for (const wall of impassableWalls) {
+        const [p3, p4] = pathWallSegment(wall);
+        if (pathSegmentsIntersect(origin, dest, p3, p4)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+const PATH_MAX_NODES = 2500;
+const PATH_DIRECTIONS: ReadonlyArray<[number, number]> = [
+  [-1, 0],
+  [1, 0],
+  [0, -1],
+  [0, 1],
+  [-1, -1],
+  [-1, 1],
+  [1, -1],
+  [1, 1],
+];
+
+function pathChebyshev(ax: number, ay: number, bx: number, by: number): number {
+  return Math.max(Math.abs(ax - bx), Math.abs(ay - by));
+}
+
+function pathKey(gx: number, gy: number): string {
+  return `${gx},${gy}`;
+}
+
+function reconstructGridPath(
+  cameFrom: Map<string, string>,
+  endGX: number,
+  endGY: number,
+  gridSize: number,
+): PathPoint[] {
+  const path: PathPoint[] = [];
+  let key = pathKey(endGX, endGY);
+  while (cameFrom.has(key)) {
+    const [gxStr, gyStr] = key.split(',');
+    path.push({ x: Number(gxStr) * gridSize, y: Number(gyStr) * gridSize });
+    key = cameFrom.get(key) ?? '';
+  }
+  path.reverse();
+  return path;
+}
+
+/** A* over the grid, avoiding `impassableWalls`. Returns null if no route exists within the node budget. */
+function findGridTokenPath(
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  gridSize: number,
+  tokenW: number,
+  tokenH: number,
+  impassableWalls: PathWallInfo[],
+): { path: PathPoint[]; cost: number } | null {
+  const startGX = Math.floor(startX / gridSize);
+  const startGY = Math.floor(startY / gridSize);
+  const endGX = Math.floor(endX / gridSize);
+  const endGY = Math.floor(endY / gridSize);
+  if (startGX === endGX && startGY === endGY) {
+    return { path: [], cost: 0 };
+  }
+
+  const startKey = pathKey(startGX, startGY);
+  const openSet: Array<{ gx: number; gy: number; g: number; f: number }> = [
+    { gx: startGX, gy: startGY, g: 0, f: pathChebyshev(startGX, startGY, endGX, endGY) },
+  ];
+  const gScore = new Map<string, number>([[startKey, 0]]);
+  const cameFrom = new Map<string, string>();
+  const closed = new Set<string>();
+  let explored = 0;
+
+  while (openSet.length > 0) {
+    if (explored >= PATH_MAX_NODES) {
+      return null;
+    }
+    let minIdx = 0;
+    let minF = openSet[0]?.f ?? Number.POSITIVE_INFINITY;
+    for (let i = 1; i < openSet.length; i++) {
+      const f = openSet[i]?.f ?? Number.POSITIVE_INFINITY;
+      if (f < minF) {
+        minF = f;
+        minIdx = i;
+      }
+    }
+    const current = openSet[minIdx];
+    if (!current) {
+      break;
+    }
+    if (current.gx === endGX && current.gy === endGY) {
+      return { path: reconstructGridPath(cameFrom, endGX, endGY, gridSize), cost: current.g };
+    }
+    openSet.splice(minIdx, 1);
+    const currentKey = pathKey(current.gx, current.gy);
+    closed.add(currentKey);
+    explored++;
+
+    for (const [dx, dy] of PATH_DIRECTIONS) {
+      const nx = current.gx + dx;
+      const ny = current.gy + dy;
+      const neighborKey = pathKey(nx, ny);
+      if (closed.has(neighborKey)) {
+        continue;
+      }
+      if (
+        isCellBlocked(current.gx, current.gy, nx, ny, gridSize, tokenW, tokenH, impassableWalls)
+      ) {
+        continue;
+      }
+      const tentativeG = current.g + 1;
+      const existingG = gScore.get(neighborKey);
+      if (existingG !== undefined && tentativeG >= existingG) {
+        continue;
+      }
+      cameFrom.set(neighborKey, currentKey);
+      gScore.set(neighborKey, tentativeG);
+      const f = tentativeG + pathChebyshev(nx, ny, endGX, endGY);
+      const existingIdx = openSet.findIndex((n) => n.gx === nx && n.gy === ny);
+      if (existingIdx >= 0) {
+        const existing = openSet[existingIdx];
+        if (existing) {
+          existing.g = tentativeG;
+          existing.f = f;
+        }
+      } else {
+        openSet.push({ gx: nx, gy: ny, g: tentativeG, f });
+      }
+    }
+  }
+  return null;
+}
+
+/** Which openable doors the given waypoint path crosses, and at which waypoint index. */
+function findDoorsOnPath(
+  startX: number,
+  startY: number,
+  gridSize: number,
+  path: PathPoint[],
+  openableDoors: PathWallInfo[],
+): PathDoorCrossing[] {
+  const centers: PathPoint[] = [
+    { x: startX + gridSize / 2, y: startY + gridSize / 2 },
+    ...path.map((p) => ({ x: p.x + gridSize / 2, y: p.y + gridSize / 2 })),
+  ];
+  const result: PathDoorCrossing[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < centers.length - 1; i++) {
+    const from = centers[i];
+    const to = centers[i + 1];
+    if (!from || !to) {
+      continue;
+    }
+    for (const door of openableDoors) {
+      if (seen.has(door.id)) {
+        continue;
+      }
+      const [p3, p4] = pathWallSegment(door);
+      if (pathSegmentsIntersectRelaxed(from, to, p3, p4)) {
+        result.push({ wallId: door.id, betweenIndex: i });
+        seen.add(door.id);
+      }
+    }
+  }
+  return result;
+}
+
+// ============================================================================
 // Mapping helpers — WorldData raw documents → display interfaces
 // ============================================================================
 
@@ -1780,6 +4900,17 @@ function worldSceneToFoundry(s: WorldScene): FoundryScene {
   };
   if (s.img) {
     scene.img = s.img;
+  }
+  if (isRecord(s.grid)) {
+    const g = s.grid;
+    scene.grid = {
+      type: typeof g.type === 'number' ? g.type : 1,
+      size: typeof g.size === 'number' ? g.size : 100,
+      color: typeof g.color === 'string' ? g.color : '#000000',
+      alpha: typeof g.alpha === 'number' ? g.alpha : 0.2,
+      distance: typeof g.distance === 'number' ? g.distance : 1,
+      units: typeof g.units === 'string' ? g.units : '',
+    };
   }
   const desc = (s.flags as Record<string, unknown>)?.description;
   if (typeof desc === 'string') {

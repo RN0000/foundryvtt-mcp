@@ -77,3 +77,29 @@ export async function handleCreateJournalEntry(
     };
   });
 }
+
+/**
+ * Handles permanently deleting a journal entry.
+ */
+export async function handleDeleteJournalEntry(
+  args: { journalId: string },
+  foundryClient: FoundryClient,
+) {
+  const { journalId } = args;
+
+  if (!journalId || typeof journalId !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'journalId is required and must be a string');
+  }
+
+  return withToolError('delete journal entry', async () => {
+    const target = foundryClient.getJournal(journalId);
+    const name = target?.name ?? journalId;
+    await foundryClient.deleteJournalEntry(journalId);
+
+    return {
+      content: [
+        { type: 'text', text: `🗑️ **Journal Entry Deleted**\n**Entry:** ${name} (${journalId})` },
+      ],
+    };
+  });
+}

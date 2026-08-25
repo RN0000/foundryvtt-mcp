@@ -123,7 +123,10 @@ async function routeLegacyTool(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      return handleDiagnoseErrors(
+        args as { category?: string; timeframe?: number },
+        diagnosticsClient,
+      );
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 

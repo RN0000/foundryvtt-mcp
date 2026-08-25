@@ -54,22 +54,44 @@ describe('item mutation handlers', () => {
       });
     });
 
-    it('creates an item from a compendium source (passes ids through)', async () => {
+    it('creates an item from a compendium source via moduleBridge', async () => {
       const mockClient = createMockClient();
+      const mockBridge = {
+        send: vi.fn(async () => ({ _id: 'rawId1234567890', _stats: {}, name: 'Flametongue', type: 'weapon', system: {} })),
+      } as unknown as import('../../../foundry/module-bridge.js').ModuleBridge;
+
       const result = await handleCreateActorItem(
         {
           actorId: VALID_ACTOR_ID,
           source: { type: 'compendium', compendiumId: 'dnd5e.items', itemId: VALID_ITEM_ID },
         },
         mockClient,
+        mockBridge,
       );
 
+      expect(mockBridge.send).toHaveBeenCalledWith('get_compendium_document', {
+        packId: 'dnd5e.items',
+        documentId: VALID_ITEM_ID,
+      });
       expect(result.content[0].text).toContain('compendium dnd5e.items');
       expect(mockClient.createActorItem).toHaveBeenCalledWith(VALID_ACTOR_ID, {
-        type: 'compendium',
-        compendiumId: 'dnd5e.items',
-        itemId: VALID_ITEM_ID,
+        type: 'inline',
+        item: { name: 'Flametongue', type: 'weapon', system: {} },
       });
+    });
+
+    it('rejects compendium source when module bridge is not available', async () => {
+      const mockClient = createMockClient();
+      await expect(
+        handleCreateActorItem(
+          {
+            actorId: VALID_ACTOR_ID,
+            source: { type: 'compendium', compendiumId: 'dnd5e.items', itemId: VALID_ITEM_ID },
+          },
+          mockClient,
+          null,
+        ),
+      ).rejects.toThrow(/requires the companion Foundry module/);
     });
 
     it('rejects an empty actorId with InvalidParams', async () => {
@@ -346,16 +368,22 @@ describe('FoundryClient item mutations (modifyDocument)', () => {
     });
   });
 
-  it('rejects a compendium-source create over Socket.IO', async () => {
-    const client = buildClient();
-    await expect(
-      client.createActorItem(VALID_ACTOR_ID, {
-        type: 'compendium',
-        compendiumId: 'dnd5e.spells',
-        itemId: VALID_ITEM_ID,
-      }),
-    ).rejects.toThrow(/compendium source is not yet supported/);
-  });
+    it('creates an item from an inline source over Socket.IO', async () => {
+      const client = buildClient();
+      await client.createActorItem(VALID_ACTOR_ID, {
+        type: 'inline',
+        item: { name: 'Healing Potion', type: 'consumable' },
+      });
+      const [, body] = lastRequest(client);
+      expect(body).toMatchObject({
+        type: 'Item',
+        action: 'create',
+        operation: {
+          data: [{ name: 'Healing Potion', type: 'consumable' }],
+          parentUuid: `Actor.${VALID_ACTOR_ID}`,
+        },
+      });
+    });
 
   it('updates an item with a nested system merge patch', async () => {
     const client = buildClient();

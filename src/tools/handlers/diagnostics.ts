@@ -283,55 +283,65 @@ ${performanceLines.join('\n')}
 }
 
 /**
- * Handles error diagnosis requests
+ * Handles error diagnosis requests via the REST API module.
  */
 export async function handleDiagnoseErrors(
   args: {
     category?: string;
+    timeframe?: number;
   },
-  _diagnosticSystem: DiagnosticSystem,
+  diagnosticsClient: DiagnosticsClient,
 ) {
-  const { category } = args;
+  const { category, timeframe = 3600 } = args;
 
   return withToolError('diagnose errors', async () => {
-    // Mock diagnosis since the method doesn't exist yet
-    const diagnosis = {
-      errors: [],
-      recommendations: ['No specific errors detected', 'System appears to be functioning normally'],
-      systemStatus: 'Operational',
-    };
+    const diagnosis = await diagnosticsClient.diagnoseErrors(timeframe);
 
-    const errorsByCategory = diagnosis.errors.reduce(
-      (acc: Record<string, unknown[]>, error: { category: string }) => {
-        if (!acc[error.category]) {
-          acc[error.category] = [];
-        }
-        acc[error.category]?.push(error);
-        return acc;
-      },
-      {},
+    const categoriesEntries = Object.entries(diagnosis.summary?.categories ?? {});
+    const filteredCategories = category
+      ? categoriesEntries.filter(([cat]) => cat.toLowerCase() === category.toLowerCase())
+      : categoriesEntries;
+
+    const categoryLines =
+      filteredCategories.length > 0
+        ? filteredCategories.map(([cat, count]) => `- **${cat}:** ${count} error(s)`).join('\n')
+        : 'No categorized errors recorded.';
+
+    const priorityOrder: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+    const sortedSuggestions = [...(diagnosis.suggestions ?? [])].sort(
+      (a, b) => (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0),
     );
 
-    const errorSummary =
-      Object.entries(errorsByCategory)
-        .map(([cat, errors]: [string, unknown[]]) => `**${cat}:** ${errors.length} error(s)`)
-        .join('\n') || 'No errors found';
+    const suggestionLines =
+      sortedSuggestions.length > 0
+        ? sortedSuggestions
+            .map((s) => `- [${s.priority.toUpperCase()}] **${s.category}:** ${s.suggestion}`)
+            .join('\n')
+        : 'No specific recommendations.';
+
+    const recentErrors = (diagnosis.recentErrors ?? []).slice(-10);
+    const errorLines =
+      recentErrors.length > 0
+        ? recentErrors.map((e) => `- \`[${e.timestamp}]\` [${e.level.toUpperCase()}] ${e.message}`).join('\n')
+        : 'No recent error logs.';
 
     return {
       content: [
         {
           type: 'text',
           text: `🔧 **Error Diagnosis**
-**Category Filter:** ${category || 'All categories'}
-**Total Errors:** ${diagnosis.errors.length}
+**Timeframe:** Last ${timeframe}s
+**Health Score:** ${diagnosis.healthScore}/100
+**Total Errors:** ${diagnosis.summary?.totalErrors ?? 0}, **Unique:** ${diagnosis.summary?.uniqueErrors ?? 0}
 
-**Error Summary:**
-${errorSummary}
+**Errors by Category:**
+${categoryLines}
 
 **Recommendations:**
-${diagnosis.recommendations.map((rec: string) => `- ${rec}`).join('\n')}
+${suggestionLines}
 
-**System Status:** ${diagnosis.systemStatus}`,
+**Recent Errors:**
+${errorLines}`,
         },
       ],
     };

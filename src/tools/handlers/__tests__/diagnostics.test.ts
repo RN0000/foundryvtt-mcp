@@ -9,6 +9,7 @@ import type { LogEntry, SystemHealth } from '../../../diagnostics/types.js';
 import { SystemHealthSchema } from '../../../diagnostics/types.js';
 import type { FoundryClient } from '../../../foundry/client.js';
 import {
+  handleDiagnoseErrors,
   handleGetHealthStatus,
   handleGetRecentLogs,
   handleGetSystemHealth,
@@ -424,5 +425,55 @@ describe('handleGetHealthStatus', () => {
 
     expect(text).not.toMatch(/stale/i);
     expect(text).not.toContain('refresh_world_data');
+  });
+});
+
+describe('handleDiagnoseErrors', () => {
+  it('renders diagnosis summary, categories, sorted suggestions, and errors', async () => {
+    const mockDiagClient = {
+      diagnoseErrors: vi.fn().mockResolvedValue({
+        timestamp: '2024-06-01T12:00:00.000Z',
+        timeframe: '3600',
+        summary: {
+          totalErrors: 5,
+          uniqueErrors: 2,
+          categories: { socket: 3, database: 2 },
+        },
+        recentErrors: [
+          { timestamp: '2024-06-01T11:55:00.000Z', level: 'error', message: 'Socket drop', source: 'foundry' },
+        ],
+        suggestions: [
+          { category: 'socket', suggestion: 'Check network cable', priority: 'critical' },
+          { category: 'database', suggestion: 'Optimize query', priority: 'medium' },
+        ],
+        healthScore: 85,
+      }),
+    } as unknown as DiagnosticsClient;
+
+    const text = getText(await handleDiagnoseErrors({ timeframe: 3600 }, mockDiagClient));
+    expect(text).toContain('Health Score:** 85/100');
+    expect(text).toContain('Total Errors:** 5');
+    expect(text).toContain('**socket:** 3 error(s)');
+    expect(text).toContain('[CRITICAL] **socket:** Check network cable');
+    expect(text).toContain('Socket drop');
+  });
+
+  it('filters by category when requested', async () => {
+    const mockDiagClient = {
+      diagnoseErrors: vi.fn().mockResolvedValue({
+        summary: {
+          totalErrors: 5,
+          uniqueErrors: 2,
+          categories: { socket: 3, database: 2 },
+        },
+        suggestions: [],
+        recentErrors: [],
+        healthScore: 85,
+      }),
+    } as unknown as DiagnosticsClient;
+
+    const text = getText(await handleDiagnoseErrors({ category: 'socket' }, mockDiagClient));
+    expect(text).toContain('**socket:** 3 error(s)');
+    expect(text).not.toContain('database');
   });
 });

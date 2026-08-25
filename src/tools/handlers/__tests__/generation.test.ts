@@ -102,42 +102,70 @@ describe('handleGenerateLoot', () => {
 
 describe('handleLookupRule', () => {
   describe('happy path', () => {
-    it('returns formatted rule with default system D&D 5e', async () => {
-      const result = await handleLookupRule({ query: 'Grapple' }, stubClient);
+    it('searches world journals and formats matches', async () => {
+      const client = {
+        searchJournals: vi.fn(() => [
+          {
+            name: 'Core Rules',
+            pages: [
+              {
+                name: 'Combat',
+                text: { content: '<p>A Grapple action requires an Athletics check against target.</p>' },
+              },
+            ],
+          },
+        ]),
+      } as unknown as FoundryClient;
+
+      const result = await handleLookupRule({ query: 'Grapple' }, client);
       const text = getText(result);
 
-      expect(text).toContain('Rule Lookup: Grapple');
-      expect(text).toContain('**System:** D&D 5e');
-      expect(text).toContain('**Rule:** Grapple Rule');
-      expect(text).toContain('**Description:**');
-      expect(text).toContain('**Mechanics:**');
-      expect(text).toContain('**Source:** D&D 5e Core Rulebook');
+      expect(text).toContain('Rule Search Results: "Grapple"');
+      expect(text).toContain('Core Rules > Combat');
+      expect(text).toContain('World Journal');
+      expect(text).toContain('Athletics check');
     });
 
-    it('honors caller-supplied system', async () => {
-      const result = await handleLookupRule(
-        { query: 'Sanity', system: 'Call of Cthulhu' },
-        stubClient,
-      );
+    it('includes compendium journal hits via module bridge', async () => {
+      const client = {
+        searchJournals: vi.fn(() => []),
+      } as unknown as FoundryClient;
+      const bridge = {
+        send: vi.fn(async () => ({
+          results: [
+            {
+              packId: 'cpr.rules',
+              packLabel: 'Cyberpunk Rules',
+              documentName: 'Friday Night Firefight',
+              snippet: 'Autofire attacks use 10 rounds of ammo.',
+            },
+          ],
+        })),
+      } as unknown as import('../../../foundry/module-bridge.js').ModuleBridge;
+
+      const result = await handleLookupRule({ query: 'Autofire' }, client, bridge);
       const text = getText(result);
 
-      expect(text).toContain('**System:** Call of Cthulhu');
-      expect(text).toContain('**Source:** Call of Cthulhu Core Rulebook');
+      expect(text).toContain('Friday Night Firefight');
+      expect(text).toContain('Compendium: Cyberpunk Rules');
+      expect(text).toContain('10 rounds of ammo');
     });
   });
 
   describe('edge cases', () => {
     it('throws McpError when query is empty string', async () => {
       await expect(
-        handleLookupRule({ query: '' } as { query: string }, stubClient),
-      ).rejects.toThrow(/Query is required/);
+        handleLookupRule({ query: '' }, stubClient),
+      ).rejects.toThrow(/query is required/);
     });
 
-    it('throws McpError when query is not a string', async () => {
-      await expect(
-        // Intentionally passing wrong type to exercise runtime guard
-        handleLookupRule({ query: 42 } as unknown as { query: string }, stubClient),
-      ).rejects.toThrow(/Query is required/);
+    it('reports no rules found when neither source matches', async () => {
+      const client = {
+        searchJournals: vi.fn(() => []),
+      } as unknown as FoundryClient;
+      const result = await handleLookupRule({ query: 'nonexistent' }, client);
+      const text = getText(result);
+      expect(text).toContain('No rules found matching "nonexistent"');
     });
   });
 });

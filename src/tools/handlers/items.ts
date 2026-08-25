@@ -16,13 +16,14 @@ export async function handleSearchItems(
     type?: string;
     rarity?: string;
     limit?: number;
+    cursor?: string;
   },
   foundryClient: FoundryClient,
 ) {
-  const { query, type, rarity, limit = 10 } = args;
+  const { query, type, rarity, limit = 10, cursor } = args;
 
   return withToolError('search items', async () => {
-    const searchParams: { query: string; type?: string; rarity?: string; limit: number } = {
+    const searchParams: { query: string; type?: string; rarity?: string; limit: number; cursor?: string } = {
       query: query || '',
       limit,
     };
@@ -31,6 +32,9 @@ export async function handleSearchItems(
     }
     if (rarity) {
       searchParams.rarity = rarity;
+    }
+    if (cursor) {
+      searchParams.cursor = cursor;
     }
     const result = await foundryClient.searchItems(searchParams);
 
@@ -55,7 +59,7 @@ export async function handleSearchItems(
 
 ${itemList || 'No items found matching the criteria.'}
 
-**Page:** ${result.page} | **Limit:** ${result.limit}`,
+**Page:** ${result.page} | **Limit:** ${result.limit}${result.nextCursor ? `\n\n_More results available. Pass cursor: "${result.nextCursor}" to retrieve the next page._` : ''}`,
         },
       ],
     };

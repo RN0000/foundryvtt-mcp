@@ -97,6 +97,8 @@ export interface FoundryItem {
   type: string;
   img?: string;
   data?: Record<string, unknown>;
+  /** Raw system-specific data (Cyberpunk RED, D&D 5e, PF2e, …); shape varies by game system. */
+  system?: Record<string, unknown>;
   // Common item properties
   description?: string;
   rarity?: string;
@@ -515,6 +517,7 @@ export interface ActorSearchResult {
   total: number;
   page: number;
   limit: number;
+  nextCursor: string | null;
 }
 
 /**
@@ -538,6 +541,7 @@ export interface ItemSearchResult {
   total: number;
   page: number;
   limit: number;
+  nextCursor: string | null;
 }
 
 /**
@@ -812,6 +816,7 @@ export interface WorldScene {
   sounds?: Array<Record<string, unknown>>;
   notes?: Array<Record<string, unknown>>;
   tiles?: Array<Record<string, unknown>>;
+  templates?: Array<Record<string, unknown>>;
   darkness: number;
   globalLight: boolean;
   globalLightThreshold?: number;
@@ -970,7 +975,7 @@ export interface WorldData {
   combats: WorldCombat[];
   users: WorldUser[];
   activeUsers: string[];
-  settings: unknown[];
+  settings: Array<Record<string, unknown>>;
   folders: Array<Record<string, unknown>>;
   macros: Array<Record<string, unknown>>;
   playlists: Array<Record<string, unknown>>;

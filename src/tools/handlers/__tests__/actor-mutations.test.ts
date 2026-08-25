@@ -1,8 +1,12 @@
 import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { FoundryClient } from '../../../foundry/client.js';
-import type { ActorAttributeUpdateResult } from '../../../foundry/types.js';
-import { handleUpdateActorAttribute } from '../actor-mutations.js';
+import type {
+  ActorAttributeUpdateResult,
+  FoundryItem,
+  WorldActor,
+} from '../../../foundry/types.js';
+import { handleCreateFullActor, handleUpdateActorAttribute } from '../actor-mutations.js';
 
 const VALID_ID = 'aaaaaaaaaaaaaaaa'; // 16 alphanumeric chars
 
@@ -119,6 +123,136 @@ describe('Actor mutation handlers', () => {
           mockClient,
         ),
       ).rejects.toThrow(McpError);
+    });
+  });
+
+  describe('handleCreateFullActor', () => {
+    const createFullActorMockClient = (
+      impl?: (
+        name: string,
+        type: string,
+        options: {
+          system?: Record<string, unknown>;
+          folder?: string;
+          items?: Array<{ name: string; type: string; system?: Record<string, unknown> }>;
+        },
+      ) => Promise<{
+        actor: WorldActor;
+        items: FoundryItem[];
+        itemErrors: Array<{ name: string; error: string }>;
+      }>,
+    ): FoundryClient => {
+      return {
+        createFullActor: vi.fn(
+          impl ??
+            (async (name: string, type: string) => ({
+              actor: { _id: VALID_ID, name, type, system: {} },
+              items: [],
+              itemErrors: [],
+            })),
+        ),
+      } as unknown as FoundryClient;
+    };
+
+    it('reports the created actor and every created item', async () => {
+      const mockClient = createFullActorMockClient(async (name, type) => ({
+        actor: { _id: VALID_ID, name, type, system: {} },
+        items: [
+          { _id: 'itemAAAAAAAAAAAA', name: 'Test Pistol', type: 'weapon' },
+          { _id: 'itemBBBBBBBBBBBB', name: 'Athletics', type: 'skill' },
+        ],
+        itemErrors: [],
+      }));
+
+      const result = await handleCreateFullActor(
+        {
+          name: 'Rook',
+          type: 'character',
+          items: [
+            { name: 'Test Pistol', type: 'weapon' },
+            { name: 'Athletics', type: 'skill' },
+          ],
+        },
+        mockClient,
+      );
+
+      const text = result.content[0].text;
+      expect(text).toContain('Full Actor Created');
+      expect(text).toContain('Rook');
+      expect(text).toContain('Items Created (2)');
+      expect(text).toContain('Test Pistol (weapon)');
+      expect(text).toContain('Athletics (skill)');
+      expect(text).not.toContain('Item Failures');
+    });
+
+    it('reports partial item failures without failing the whole call', async () => {
+      const mockClient = createFullActorMockClient(async (name, type) => ({
+        actor: { _id: VALID_ID, name, type, system: {} },
+        items: [{ _id: 'itemAAAAAAAAAAAA', name: 'Test Pistol', type: 'weapon' }],
+        itemErrors: [{ name: 'Bogus Item', error: 'Invalid item type: bogus' }],
+      }));
+
+      const result = await handleCreateFullActor(
+        {
+          name: 'Rook',
+          type: 'character',
+          items: [
+            { name: 'Test Pistol', type: 'weapon' },
+            { name: 'Bogus Item', type: 'bogus' },
+          ],
+        },
+        mockClient,
+      );
+
+      const text = result.content[0].text;
+      expect(text).toContain('Items Created (1)');
+      expect(text).toContain('Item Failures (1)');
+      expect(text).toContain('Bogus Item: Invalid item type: bogus');
+    });
+
+    it('reports zero items created when none were requested', async () => {
+      const mockClient = createFullActorMockClient();
+      const result = await handleCreateFullActor({ name: 'Rook', type: 'character' }, mockClient);
+      expect(result.content[0].text).toContain('Items Created (0)');
+      expect(result.content[0].text).toContain('_none_');
+    });
+
+    it('rejects a missing name before reaching the client', async () => {
+      const mockClient = createFullActorMockClient();
+      await expect(
+        handleCreateFullActor({ name: '', type: 'character' }, mockClient),
+      ).rejects.toThrow(McpError);
+      expect(mockClient.createFullActor).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing type before reaching the client', async () => {
+      const mockClient = createFullActorMockClient();
+      await expect(handleCreateFullActor({ name: 'Rook', type: '' }, mockClient)).rejects.toThrow(
+        McpError,
+      );
+      expect(mockClient.createFullActor).not.toHaveBeenCalled();
+    });
+
+    it('rejects a non-array items field before reaching the client', async () => {
+      const mockClient = createFullActorMockClient();
+      await expect(
+        handleCreateFullActor(
+          { name: 'Rook', type: 'character', items: 'nope' as unknown as [] },
+          mockClient,
+        ),
+      ).rejects.toThrow(McpError);
+      expect(mockClient.createFullActor).not.toHaveBeenCalled();
+    });
+
+    it('propagates the write-disabled guard error', async () => {
+      const mockClient = createFullActorMockClient(() => {
+        throw new Error(
+          'Write operations are disabled. Set FOUNDRY_WRITE_ENABLED=true to allow game-state mutation.',
+        );
+      });
+      await expect(
+        handleCreateFullActor({ name: 'Rook', type: 'character' }, mockClient),
+      ).rejects.toThrow(/FOUNDRY_WRITE_ENABLED/);
     });
   });
 
@@ -307,6 +441,132 @@ describe('Actor mutation handlers', () => {
           pack: null,
         },
       });
+    });
+  });
+
+  // --------------------------------------------------------------------------
+  // Client-level validation (exercises the real createFullActor logic).
+  // --------------------------------------------------------------------------
+  describe('FoundryClient.createFullActor', () => {
+    type SocketEmitMock = (
+      event: string,
+      payload: unknown,
+      cb: (response: unknown) => void,
+    ) => void;
+
+    let nextId = 0;
+    /** 16-char alphanumeric id (matches FOUNDRY_ID_PATTERN) — prefix ignored, kept for call-site readability. */
+    const freshId = (_prefix: string) => `id${String(++nextId).padStart(14, '0')}`;
+
+    /** Actor create always succeeds; Item create fails for any item named "Bogus Item". */
+    const buildClient = (writeEnabled = true) => {
+      const client = new FoundryClient({ baseUrl: 'http://localhost:30000', writeEnabled });
+      const emit = vi.fn(((_event, payload, cb) => {
+        const req = payload as {
+          type: string;
+          action: string;
+          operation: { data?: Array<Record<string, unknown>> };
+        };
+        const doc = req.operation.data?.[0];
+        if (req.type === 'Item' && doc?.name === 'Bogus Item') {
+          cb({ error: { message: `Invalid item type: ${doc.type}` } });
+          return;
+        }
+        const prefix = req.type === 'Actor' ? 'actor' : 'item';
+        cb({ result: [{ ...doc, _id: freshId(prefix) }] });
+      }) as SocketEmitMock);
+      (client as unknown as { socket: { connected: boolean; emit: SocketEmitMock } }).socket = {
+        connected: true,
+        emit,
+      };
+      return { client, emit };
+    };
+
+    it('creates the actor with no items when none are requested', async () => {
+      const { client } = buildClient();
+      const result = await client.createFullActor('Rook', 'character');
+      expect(result.actor.name).toBe('Rook');
+      expect(result.items).toEqual([]);
+      expect(result.itemErrors).toEqual([]);
+    });
+
+    it('creates the actor then every item on it, in order', async () => {
+      const { client, emit } = buildClient();
+      const result = await client.createFullActor('Rook', 'character', {
+        system: { stats: { ref: { value: 8 } } },
+        items: [
+          { name: 'Test Pistol', type: 'weapon' },
+          { name: 'Athletics', type: 'skill', system: { level: 4 } },
+        ],
+      });
+
+      expect(result.actor.name).toBe('Rook');
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0]?.name).toBe('Test Pistol');
+      expect(result.items[1]?.name).toBe('Athletics');
+      expect(result.itemErrors).toEqual([]);
+
+      // First call creates the Actor; every subsequent call creates an Item
+      // parented to the actor that was just returned.
+      const calls = emit.mock.calls.map(([, payload]) => payload as { type: string });
+      expect(calls[0]?.type).toBe('Actor');
+      expect(calls[1]?.type).toBe('Item');
+      expect(calls[2]?.type).toBe('Item');
+      const [, itemPayload] = emit.mock.calls[1] ?? [];
+      const parentUuid =
+        itemPayload &&
+        typeof itemPayload === 'object' &&
+        'operation' in itemPayload &&
+        itemPayload.operation &&
+        typeof itemPayload.operation === 'object' &&
+        'parentUuid' in itemPayload.operation
+          ? itemPayload.operation.parentUuid
+          : undefined;
+      expect(parentUuid).toBe(`Actor.${result.actor._id}`);
+    });
+
+    it('reports a failed item without losing the actor or the items that succeeded', async () => {
+      const { client } = buildClient();
+      const result = await client.createFullActor('Rook', 'character', {
+        items: [
+          { name: 'Test Pistol', type: 'weapon' },
+          { name: 'Bogus Item', type: 'bogus' },
+          { name: 'Athletics', type: 'skill' },
+        ],
+      });
+
+      expect(result.actor.name).toBe('Rook');
+      expect(result.items.map((i) => i.name)).toEqual(['Test Pistol', 'Athletics']);
+      expect(result.itemErrors).toEqual([
+        { name: 'Bogus Item', error: 'FoundryVTT rejected create Item: Invalid item type: bogus' },
+      ]);
+    });
+
+    it('rejects an item with no name before creating the actor', async () => {
+      const { client, emit } = buildClient();
+      await expect(
+        client.createFullActor('Rook', 'character', {
+          items: [{ name: '', type: 'weapon' }],
+        }),
+      ).rejects.toThrow(/requires a name/);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects an item with no type before creating the actor', async () => {
+      const { client, emit } = buildClient();
+      await expect(
+        client.createFullActor('Rook', 'character', {
+          items: [{ name: 'Mystery Box', type: '' }],
+        }),
+      ).rejects.toThrow(/"Mystery Box" requires a type/);
+      expect(emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects writes when FOUNDRY_WRITE_ENABLED is false', async () => {
+      const { client } = buildClient(false);
+      await expect(client.createFullActor('Rook', 'character')).rejects.toThrow(
+        /FOUNDRY_WRITE_ENABLED/,
+      );
     });
   });
 });

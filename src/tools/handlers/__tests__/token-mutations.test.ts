@@ -2,7 +2,12 @@ import { McpError } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, vi } from 'vitest';
 import { FoundryClient } from '../../../foundry/client.js';
 import type { WorldActor, WorldEffect, WorldScene } from '../../../foundry/types.js';
-import { handleApplyStatusEffect, handleMoveToken } from '../token-mutations.js';
+import {
+  handleApplyStatusEffect,
+  handleMoveToken,
+  handleMoveTokens,
+  handleUpdateTokenVision,
+} from '../token-mutations.js';
 
 const SCENE_ID = 'ssssssssssssssss'; // 16 alphanumeric chars
 const TOKEN_ID = 'tttttttttttttttt';
@@ -197,6 +202,162 @@ describe('Token mutation handlers', () => {
       await expect(
         handleApplyStatusEffect({ tokenId: TOKEN_ID, statusId: '' }, client),
       ).rejects.toThrow(McpError);
+    });
+  });
+
+  describe('handleMoveTokens', () => {
+    const createMoveTokensClient = (opts: {
+      located?: Record<string, { scene: WorldScene; token: Record<string, unknown> } | null>;
+      moveToken?: (sceneId: string, tokenId: string, x: number, y: number) => unknown;
+      moveTokenPathfind?: (
+        sceneId: string,
+        tokenId: string,
+        x: number,
+        y: number,
+        options: { openDoors?: boolean },
+      ) => unknown;
+      writeEnabled?: boolean;
+    }): FoundryClient =>
+      ({
+        findToken: vi.fn((tokenId: string) => opts.located?.[tokenId] ?? null),
+        moveToken: vi.fn(opts.moveToken ?? (() => ({}))),
+        moveTokenPathfind: vi.fn(
+          opts.moveTokenPathfind ??
+            (() => ({ path: [{ x: 0, y: 0 }], doorsOpened: [], blocked: false, final: {} })),
+        ),
+        isWriteEnabled: vi.fn(() => opts.writeEnabled ?? true),
+      }) as unknown as FoundryClient;
+
+    it('moves every token directly and reports the success count', async () => {
+      const tokenA = { _id: 'aaaaaaaaaaaaaaaa', name: 'Fighter' };
+      const tokenB = { _id: 'bbbbbbbbbbbbbbbb', name: 'Rogue' };
+      const client = createMoveTokensClient({
+        located: {
+          aaaaaaaaaaaaaaaa: { scene: makeScene(tokenA), token: tokenA },
+          bbbbbbbbbbbbbbbb: { scene: makeScene(tokenB), token: tokenB },
+        },
+      });
+
+      const result = await handleMoveTokens(
+        {
+          moves: [
+            { tokenId: 'aaaaaaaaaaaaaaaa', x: 100, y: 200 },
+            { tokenId: 'bbbbbbbbbbbbbbbb', x: 300, y: 400 },
+          ],
+        },
+        client,
+      );
+
+      expect(result.content[0].text).toContain('Tokens Moved** (2/2)');
+      expect(result.content[0].text).toContain('Fighter');
+      expect(result.content[0].text).toContain('Rogue');
+      expect(client.moveToken).toHaveBeenCalledWith(SCENE_ID, 'aaaaaaaaaaaaaaaa', 100, 200);
+      expect(client.moveToken).toHaveBeenCalledWith(SCENE_ID, 'bbbbbbbbbbbbbbbb', 300, 400);
+    });
+
+    it('reports an unknown token as a per-item failure without losing the rest', async () => {
+      const tokenA = { _id: 'aaaaaaaaaaaaaaaa', name: 'Fighter' };
+      const client = createMoveTokensClient({
+        located: { aaaaaaaaaaaaaaaa: { scene: makeScene(tokenA), token: tokenA } },
+      });
+
+      const result = await handleMoveTokens(
+        {
+          moves: [
+            { tokenId: 'zzzzzzzzzzzzzzzz', x: 1, y: 2 },
+            { tokenId: 'aaaaaaaaaaaaaaaa', x: 100, y: 200 },
+          ],
+        },
+        client,
+      );
+
+      expect(result.content[0].text).toContain('Tokens Moved** (1/2)');
+      expect(result.content[0].text).toContain('Failed (1)');
+      expect(result.content[0].text).toContain('zzzzzzzzzzzzzzzz: token not found');
+      expect(client.moveToken).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes a move through moveTokenPathfind when pathfind is true, reporting a blocked route as a failure', async () => {
+      const tokenA = { _id: 'aaaaaaaaaaaaaaaa', name: 'Fighter' };
+      const tokenB = { _id: 'bbbbbbbbbbbbbbbb', name: 'Rogue' };
+      const client = createMoveTokensClient({
+        located: {
+          aaaaaaaaaaaaaaaa: { scene: makeScene(tokenA), token: tokenA },
+          bbbbbbbbbbbbbbbb: { scene: makeScene(tokenB), token: tokenB },
+        },
+        moveTokenPathfind: (_s, tokenId) =>
+          tokenId === 'bbbbbbbbbbbbbbbb'
+            ? { path: [], doorsOpened: [], blocked: true, final: null }
+            : {
+                path: [
+                  { x: 1, y: 1 },
+                  { x: 100, y: 200 },
+                ],
+                doorsOpened: ['w'],
+                blocked: false,
+                final: {},
+              },
+      });
+
+      const result = await handleMoveTokens(
+        {
+          moves: [
+            { tokenId: 'aaaaaaaaaaaaaaaa', x: 100, y: 200, pathfind: true },
+            { tokenId: 'bbbbbbbbbbbbbbbb', x: 300, y: 400, pathfind: true },
+          ],
+        },
+        client,
+      );
+
+      expect(result.content[0].text).toContain('Tokens Moved** (1/2)');
+      expect(result.content[0].text).toContain('via 2 waypoint(s)');
+      expect(result.content[0].text).toContain('opened 1 door(s)');
+      expect(result.content[0].text).toContain('no route to (300, 400)');
+      expect(client.moveToken).not.toHaveBeenCalled();
+    });
+
+    it('fails fast with one error when writes are disabled, without calling findToken', async () => {
+      const client = createMoveTokensClient({ writeEnabled: false });
+
+      await expect(
+        handleMoveTokens({ moves: [{ tokenId: 'aaaaaaaaaaaaaaaa', x: 1, y: 2 }] }, client),
+      ).rejects.toThrow(/FOUNDRY_WRITE_ENABLED/);
+      expect(client.findToken).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty moves array', async () => {
+      const client = createMoveTokensClient({});
+      await expect(handleMoveTokens({ moves: [] }, client)).rejects.toThrow(McpError);
+    });
+
+    it('rejects a move with non-finite coordinates before reaching the client', async () => {
+      const client = createMoveTokensClient({});
+      await expect(
+        handleMoveTokens({ moves: [{ tokenId: 'aaaaaaaaaaaaaaaa', x: Number.NaN, y: 0 }] }, client),
+      ).rejects.toThrow(McpError);
+      expect(client.isWriteEnabled).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('handleUpdateTokenVision', () => {
+    it('updates vision settings on a located token', async () => {
+      const token = { _id: TOKEN_ID, name: 'Goblin' };
+      const client = {
+        findToken: vi.fn(() => ({ scene: makeScene(token), token })),
+        updateTokenVision: vi.fn(() => Promise.resolve({})),
+      } as unknown as FoundryClient;
+
+      const result = await handleUpdateTokenVision({ tokenId: TOKEN_ID, sightRange: 30 }, client);
+      expect(result.content[0].text).toContain('Token Vision/Light Updated');
+      expect(client.updateTokenVision).toHaveBeenCalledWith(SCENE_ID, TOKEN_ID, { tokenId: TOKEN_ID, sightRange: 30 });
+    });
+
+    it('throws McpError when token is missing', async () => {
+      const client = {
+        findToken: vi.fn(() => null),
+      } as unknown as FoundryClient;
+
+      await expect(handleUpdateTokenVision({ tokenId: TOKEN_ID }, client)).rejects.toThrow(McpError);
     });
   });
 });

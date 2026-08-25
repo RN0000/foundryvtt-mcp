@@ -64,3 +64,117 @@ ${updatedList}`,
     };
   });
 }
+
+/**
+ * Handles creating a new top-level Actor document (NPC/character sheet).
+ */
+export async function handleCreateWorldActor(
+  args: {
+    name: string;
+    type: string;
+    system?: Record<string, unknown>;
+    folder?: string;
+  },
+  foundryClient: FoundryClient,
+) {
+  const { name, type, system, folder } = args;
+
+  if (!name || typeof name !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'name is required and must be a string');
+  }
+  if (!type || typeof type !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'type is required and must be a string');
+  }
+
+  return withToolError('create world actor', async () => {
+    const actor = await foundryClient.createWorldActor(name, type, system, folder);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🎭 **Actor Created**
+**Name:** ${actor.name}
+**Type:** ${actor.type}
+**ID:** ${actor._id}`,
+        },
+      ],
+    };
+  });
+}
+
+/**
+ * Handles creating a new top-level Actor document AND seeding it with
+ * starting items (skills, gear, weapons, …) in one call.
+ */
+export async function handleCreateFullActor(
+  args: {
+    name: string;
+    type: string;
+    system?: Record<string, unknown>;
+    folder?: string;
+    items?: Array<{ name: string; type: string; system?: Record<string, unknown> }>;
+  },
+  foundryClient: FoundryClient,
+) {
+  const { name, type, ...options } = args;
+
+  if (!name || typeof name !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'name is required and must be a string');
+  }
+  if (!type || typeof type !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'type is required and must be a string');
+  }
+  if (options.items !== undefined && !Array.isArray(options.items)) {
+    throw new McpError(ErrorCode.InvalidParams, 'items must be an array when provided');
+  }
+
+  return withToolError('create full actor', async () => {
+    const { actor, items, itemErrors } = await foundryClient.createFullActor(name, type, options);
+
+    const itemLines =
+      items.length > 0
+        ? items.map((i) => `- ${i.name} (${i.type}) — ID: ${i._id}`).join('\n')
+        : '_none_';
+    const errorLines =
+      itemErrors.length > 0
+        ? `\n\n**Item Failures (${itemErrors.length}):**\n${itemErrors.map((e) => `- ${e.name}: ${e.error}`).join('\n')}`
+        : '';
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `🎭 **Full Actor Created**
+**Name:** ${actor.name}
+**Type:** ${actor.type}
+**ID:** ${actor._id}
+**Items Created (${items.length}):**
+${itemLines}${errorLines}`,
+        },
+      ],
+    };
+  });
+}
+
+/**
+ * Handles permanently deleting a top-level Actor document.
+ */
+export async function handleDeleteWorldActor(
+  args: { actorId: string },
+  foundryClient: FoundryClient,
+) {
+  const { actorId } = args;
+
+  if (!actorId || typeof actorId !== 'string') {
+    throw new McpError(ErrorCode.InvalidParams, 'actorId is required and must be a string');
+  }
+
+  return withToolError('delete actor', async () => {
+    await foundryClient.deleteWorldActor(actorId);
+
+    return {
+      content: [{ type: 'text', text: `🗑️ **Actor Deleted**\n**ID:** ${actorId}` }],
+    };
+  });
+}

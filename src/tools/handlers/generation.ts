@@ -6,6 +6,7 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import type { ModuleBridge } from '../../foundry/module-bridge.js';
 import { withToolError } from './utils.js';
 
 /**
@@ -88,37 +89,96 @@ ${loot.items.map((item) => `- ${item.name} (${item.rarity})`).join('\n')}
 }
 
 /**
- * Handles rule lookup requests
+ * Handles rule lookup requests across world journals and compendium journal packs.
  */
 export async function handleLookupRule(
   args: {
     query: string;
-    system?: string;
   },
-  _foundryClient: FoundryClient,
+  foundryClient: FoundryClient,
+  moduleBridge: ModuleBridge | null = null,
 ) {
-  const { query, system = 'D&D 5e' } = args;
+  const { query } = args;
 
   if (!query || typeof query !== 'string') {
-    throw new McpError(ErrorCode.InvalidParams, 'Query is required and must be a string');
+    throw new McpError(ErrorCode.InvalidParams, 'query is required and must be a string');
   }
 
   return withToolError('lookup rule', async () => {
-    const ruleInfo = lookupGameRule(query, system);
+    const hits: Array<{ title: string; source: string; snippet?: string }> = [];
+
+    // 1. Search world journals
+    const worldJournals = foundryClient.searchJournals(query);
+    for (const j of worldJournals) {
+      for (const page of j.pages ?? []) {
+        const text = page.text?.content ?? '';
+        const plain = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
+        const idx = plain.toLowerCase().indexOf(query.toLowerCase());
+        if (idx !== -1) {
+          const start = Math.max(0, idx - 60);
+          const end = Math.min(plain.length, idx + query.length + 60);
+          const snippet =
+            (start > 0 ? '...' : '') +
+            plain.slice(start, end).trim() +
+            (end < plain.length ? '...' : '');
+          hits.push({ title: `${j.name} > ${page.name}`, source: 'World Journal', snippet });
+        } else if (
+          page.name.toLowerCase().includes(query.toLowerCase()) ||
+          j.name.toLowerCase().includes(query.toLowerCase())
+        ) {
+          hits.push({ title: `${j.name} > ${page.name}`, source: 'World Journal' });
+        }
+      }
+    }
+
+    // 2. Search compendium journal packs via module bridge if available
+    let compendiumSearched = false;
+    if (moduleBridge) {
+      try {
+        const compResult = (await moduleBridge.send('search_compendium_content', {
+          query,
+          packType: 'JournalEntry',
+          limit: 10,
+        })) as { results?: Array<{ documentName: string; packLabel: string; snippet?: string }> };
+
+        if (Array.isArray(compResult?.results)) {
+          compendiumSearched = true;
+          for (const r of compResult.results) {
+            hits.push({
+              title: r.documentName,
+              source: `Compendium: ${r.packLabel}`,
+              ...(r.snippet ? { snippet: r.snippet } : {}),
+            });
+          }
+        }
+      } catch {
+        // Module bridge failed or unavailable
+      }
+    }
+
+    if (hits.length === 0) {
+      const note = !compendiumSearched
+        ? '\n\n_Note: Compendium rules packs were not searched (companion module not connected)._'
+        : '';
+      return {
+        content: [{ type: 'text', text: `📖 **No rules found matching "${query}".**${note}` }],
+      };
+    }
+
+    const lines = hits.map((h) => {
+      const snip = h.snippet ? `\n    > "${h.snippet}"` : '';
+      return `- **${h.title}** [_${h.source}_]${snip}`;
+    });
+
+    const bridgeNotice = !compendiumSearched
+      ? '\n\n_Note: Compendium rules packs were not searched (companion module not connected)._'
+      : '';
 
     return {
       content: [
         {
           type: 'text',
-          text: `📖 **Rule Lookup: ${query}**
-**System:** ${system}
-
-**Rule:** ${ruleInfo.title}
-**Description:** ${ruleInfo.description}
-
-**Mechanics:** ${ruleInfo.mechanics}
-
-**Source:** ${ruleInfo.source}`,
+          text: `📖 **Rule Search Results: "${query}"** (${hits.length})\n\n${lines.join('\n')}${bridgeNotice}`,
         },
       ],
     };

@@ -81,6 +81,10 @@ export const actorTools = [
           description: 'Maximum number of results to return',
           default: 10,
         },
+        cursor: {
+          type: 'string',
+          description: 'Opaque pagination cursor from a previous response to fetch the next page',
+        },
       },
     },
   },
@@ -94,6 +98,21 @@ export const actorTools = [
         actorId: {
           type: 'string',
           description: 'The ID of the actor to retrieve',
+        },
+      },
+      required: ['actorId'],
+    },
+  },
+  {
+    name: 'get_actor_inventory',
+    description:
+      "List an actor's owned items (equipment, spells, features) with full system data per item, unlike get_actor_details which only reports the actor's own top-level stats. Use when: checking what a character or NPC carries or knows before an attack, spell, or trade. Do not use when: you only need the actor's HP/AC/abilities - use get_actor_details.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: {
+          type: 'string',
+          description: 'The ID of the actor whose inventory to list',
         },
       },
       required: ['actorId'],
@@ -133,6 +152,105 @@ export const actorMutationTools = [
       required: ['actorId', 'patch'],
     },
   },
+  {
+    name: 'create_world_actor',
+    description:
+      'Create a new top-level Actor document (a permanent NPC or character sheet in the sidebar), optionally seeded with system data and filed under a folder. Use when: a new NPC or creature needs to exist as a persistent document, not just described in text. Do not use when: a quick throwaway description is enough - use generate_npc; or when adding an item to an actor that already exists - use create_actor_item. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Actor display name',
+        },
+        type: {
+          type: 'string',
+          description: 'Game-system actor type (e.g. "character", "npc")',
+        },
+        system: {
+          type: 'object',
+          description: 'Optional system-specific data merged into actor.system',
+        },
+        folder: {
+          type: 'string',
+          description: 'Optional Folder document id to file the actor under',
+        },
+      },
+      required: ['name', 'type'],
+    },
+  },
+  {
+    name: 'create_full_actor',
+    description:
+      "Create a new top-level Actor document AND seed it with starting items (skills, gear, weapons, cyberware, …) in one call, instead of create_world_actor followed by one create_actor_item per item. Pairs with get_document_schema: call that once per Actor/Item type to learn the real field names for `system`, then build the whole character here in a single call. The actor is always created first - a failure there aborts the whole call. Item creation is best-effort per item, not atomic: a bad item (e.g. a typo'd type) is reported in the response's item-failures list rather than losing the actor or the items that did succeed. Use when: standing up a fully-statted PC or NPC (correct ability scores/attributes plus starting equipment/skills) in one round trip. Do not use when: the actor already exists - use create_actor_item to add items to it; or a bare/generic actor is enough - use create_world_actor. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Actor display name',
+        },
+        type: {
+          type: 'string',
+          description: 'Game-system actor type (e.g. "character", "npc")',
+        },
+        system: {
+          type: 'object',
+          description:
+            'Optional system-specific data merged into actor.system - use get_document_schema("Actor", type) to learn the real field names first',
+        },
+        folder: {
+          type: 'string',
+          description: 'Optional Folder document id to file the actor under',
+        },
+        items: {
+          type: 'array',
+          description:
+            'Optional starting items (skills, weapons, gear, cyberware, …) to create on the actor immediately after it exists',
+          items: {
+            type: 'object',
+            properties: {
+              name: {
+                type: 'string',
+                description: 'Item display name',
+              },
+              type: {
+                type: 'string',
+                description:
+                  'Game-system item type (e.g. "weapon", "skill") - use get_document_schema("Item", type) to learn the real field names first',
+              },
+              system: {
+                type: 'object',
+                description: 'Optional system-specific data merged into item.system',
+              },
+            },
+            required: ['name', 'type'],
+          },
+        },
+      },
+      required: ['name', 'type'],
+    },
+  },
+  {
+    name: 'delete_world_actor',
+    description:
+      'Permanently delete a top-level Actor document. Use when: the user explicitly asks to remove an NPC or character sheet, and has given you the actorId. Do not use when: only removing a token placed on a scene - use delete_token; the actor document is untouched by that. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: {
+          type: 'string',
+          description: 'The ID of the actor to delete',
+        },
+      },
+      required: ['actorId'],
+    },
+  },
 ];
 
 /**
@@ -163,6 +281,10 @@ export const itemTools = [
           type: 'number',
           description: 'Maximum number of results to return',
           default: 10,
+        },
+        cursor: {
+          type: 'string',
+          description: 'Opaque pagination cursor from a previous response to fetch the next page',
         },
       },
     },
@@ -237,7 +359,7 @@ export const itemMutationTools = [
   {
     name: 'create_actor_item',
     description:
-      'Create an item on an actor from an inline item document (type, name, system). Use when: adding a new weapon, spell, feature, or piece of equipment to a known actorId. Do not use when: editing an item the actor already owns - use update_actor_item. Replacing an item is not atomic: create the replacement first and delete the old one second, so a mid-sequence failure leaves the actor with a duplicate rather than nothing. Compendium-source create is not yet supported over Socket.IO (see issue #159). Canonical target: D&D 5e v4+ activity schema. ' +
+      'Create an item on an actor from an inline item document (type, name, system) or by referencing a compendium pack entry (compendium sources require the companion Foundry module). Use when: adding a new weapon, spell, feature, or piece of equipment to a known actorId. Do not use when: editing an item the actor already owns - use update_actor_item. Replacing an item is not atomic: create the replacement first and delete the old one second. Canonical target: D&D 5e v4+ activity schema. ' +
       WRITE_GATE,
     inputSchema: {
       type: 'object',
@@ -249,13 +371,13 @@ export const itemMutationTools = [
         source: {
           type: 'object',
           description:
-            'Item source. Use { type: "inline", item: { type, name, system } } to create the item directly. The { type: "compendium", compendiumId, itemId } shape is accepted by the schema but rejected at call time - compendium-source create is not yet supported over Socket.IO.',
+            'Item source. Either { type: "inline", item: { type, name, system } } or { type: "compendium", compendiumId, itemId } (requires companion module).',
           properties: {
             type: {
               type: 'string',
               enum: ['compendium', 'inline'],
               description:
-                'Source kind. Only "inline" is functional today; "compendium" is rejected at call time.',
+                'Source kind: "inline" (provides inline item data) or "compendium" (fetches from pack via companion module).',
             },
             compendiumId: {
               type: 'string',
@@ -332,7 +454,7 @@ export const sceneTools = [
   {
     name: 'get_scene_info',
     description:
-      "Get details of the active scene, or of a specific scene by id: name, scene id, active/navigation flags, pixel dimensions, padding and lighting (global light, darkness); no description text is returned unless a module has set a description flag on the scene (the description line otherwise reads 'No description available.'). Use when: you need the sceneId or the scene's pixel extents. Do not use when: looking a scene up by name (use search_world), or you need grid size or token coordinates - this tool returns neither.",
+      "Get details of the active scene, or of a specific scene by id: name, scene id, active/navigation flags, pixel dimensions, padding, grid (type, size in pixels, distance, units), and lighting (global light, darkness); no description text is returned unless a module has set a description flag on the scene (the description line otherwise reads 'No description available.'). Use when: you need the sceneId, grid size, or the scene's pixel extents. Do not use when: looking a scene up by name (use search_world), or you need token/tile coordinates - this tool returns neither; use list_tiles or the foundry://scenes resource.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -345,6 +467,759 @@ export const sceneTools = [
   },
 ];
 
+/**
+ * Scene mutation tool definitions
+ *
+ * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active
+ * Socket.IO connection (mutations use the core `modifyDocument` protocol).
+ */
+export const sceneMutationTools = [
+  {
+    name: 'create_scene',
+    description:
+      "Create a new Scene document from a background image already present under FoundryVTT's Data directory (see list_scene_assets to browse available map art). Width/height default to the image's real pixel dimensions read from disk (requires FOUNDRY_DATA_PATH) — the single biggest source of a misaligned grid when set by hand; pass width/height explicitly to override. Use when: a new location needs a scene before the party arrives there, or a fresh battlemap needs to exist as a document. Do not use when: the scene already exists - use switch_scene to activate it, or set_scene_lighting to change its lighting. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Scene display name',
+        },
+        backgroundSrc: {
+          type: 'string',
+          description:
+            'Data-relative path to the background image (e.g. "assets/cyberpunk/maps/v1/x.jpg"), as returned by list_scene_assets',
+        },
+        width: {
+          type: 'number',
+          description: "Optional explicit pixel width; defaults to the image's real width",
+        },
+        height: {
+          type: 'number',
+          description: "Optional explicit pixel height; defaults to the image's real height",
+        },
+        gridSize: {
+          type: 'number',
+          description: 'Grid cell size in pixels (default 100)',
+        },
+        gridType: {
+          type: 'number',
+          description: 'Foundry grid type constant (default 1 = square)',
+        },
+        gridDistance: {
+          type: 'number',
+          description: 'Real-world distance one grid cell represents (default 1)',
+        },
+        gridUnits: {
+          type: 'string',
+          description: 'Unit label for gridDistance (e.g. "ft", "m") (default "ft")',
+        },
+        padding: {
+          type: 'number',
+          description: 'Fractional canvas padding around the background image (default 0.25)',
+        },
+        backgroundColor: {
+          type: 'string',
+          description: 'Hex color shown outside the background image (default "#999999")',
+        },
+        activate: {
+          type: 'boolean',
+          description: 'Optional; true to immediately activate the new scene for all players',
+        },
+      },
+      required: ['name', 'backgroundSrc'],
+    },
+  },
+  {
+    name: 'switch_scene',
+    description:
+      "Activate a scene, switching every connected player's canvas to it. FoundryVTT enforces a single active scene server-side, so activating one automatically deactivates whichever scene was active before - no separate deactivation call is needed. Use when: the party moves to a new map (new area, travel, a battle starting on a prepared map). Do not use when: you only need to read scene info - use get_scene_info. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to activate',
+        },
+      },
+      required: ['sceneId'],
+    },
+  },
+  {
+    name: 'delete_scene',
+    description:
+      'Permanently delete a Scene document. Use when: the user explicitly asks to remove a map that is no longer needed. Do not use when: you only want to stop showing it to players - use switch_scene to activate a different one instead; deleting the active scene leaves no scene active. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to delete',
+        },
+      },
+      required: ['sceneId'],
+    },
+  },
+  {
+    name: 'set_scene_lighting',
+    description:
+      "Set a scene's ambient darkness level (0-1) and/or global illumination fields (globalLight, globalLightThreshold). Plain Scene document fields - no canvas access required. Use when: transitioning to night, dimming a room, or lighting a torch-lit area. Do not use when: you only need to read current lighting - use get_scene_info. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to update',
+        },
+        darkness: {
+          type: 'number',
+          minimum: 0,
+          maximum: 1,
+          description: 'Ambient darkness level, 0 (fully lit) to 1 (pitch black)',
+        },
+        globalLight: {
+          type: 'boolean',
+          description: 'Whether the whole scene is globally illuminated',
+        },
+        globalLightThreshold: {
+          type: 'number',
+          description: 'Darkness level above which global light is suppressed',
+        },
+      },
+      required: ['sceneId'],
+    },
+  },
+  {
+    name: 'reset_fog',
+    description:
+      'Reset fog of war exploration progress for a scene, defaulting to the active scene when sceneId is omitted. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+];
+
+/**
+ * Wall (structural) tool definitions
+ *
+ * `list_walls` is a pure read over cached worldData. `create_wall`,
+ * `delete_wall`, and `set_door_state` are WRITE operations — require
+ * FOUNDRY_WRITE_ENABLED=true and an active Socket.IO connection (mutations
+ * use the core `modifyDocument` protocol). `ds` (door state) is a plain
+ * field on the `Wall` embedded document, so none of this needs canvas access.
+ */
+export const wallMutationTools = [
+  {
+    name: 'list_walls',
+    description:
+      "List the Walls on a scene (id, endpoints, and the move/sight/door/ds fields), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: finding a wallId for delete_wall/set_door_state, or checking a scene's current wall layout before adding more. Do not use when: you need tile or token positions instead - this only lists Wall documents.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'create_wall',
+    description:
+      'Create a new Wall segment on a scene - the structural building block for rooms, corridors, and doors. Unlike create_tile (which centres in a cell), a wall connects two grid *vertices* (intersections): fromCol/fromRow -> toCol/toRow, e.g. fromCol:3,fromRow:5 -> toCol:4,toRow:5 is the one-cell-long top edge of cell (3,5); a longer run spans multiple cells in one call. Alternatively pass explicit pixel x1/y1/x2/y2. type selects one of FoundryVTT\'s own named wall presets (the ones its wall-tool palette offers): "wall" (default, solid - blocks movement and sight), "door" (openable via set_door_state, starts closed), "secretDoor" (looks like a wall until discovered, starts closed), "terrain" (blocks movement; sight/light only block on the second crossing - hedges, foliage: you can see the hedge but not what is directly behind it), "invisible" (blocks movement but not sight - furniture, low obstacles, hidden traps), "ethereal" (the inverse of invisible: blocks sight but not movement - magical curtains, spectral barriers). Use when: building out a scene\'s room layout, or adding a door/terrain/invisible/ethereal wall to an existing wall line. Do not use when: you want to toggle an existing door open/closed/locked - use set_door_state; or decorate with a prop - use create_tile. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to place the wall on',
+        },
+        x1: {
+          type: 'number',
+          description: 'Start pixel x coordinate. Alternative to fromCol/fromRow.',
+        },
+        y1: {
+          type: 'number',
+          description: 'Start pixel y coordinate. Alternative to fromCol/fromRow.',
+        },
+        x2: {
+          type: 'number',
+          description: 'End pixel x coordinate. Alternative to toCol/toRow.',
+        },
+        y2: {
+          type: 'number',
+          description: 'End pixel y coordinate. Alternative to toCol/toRow.',
+        },
+        fromCol: {
+          type: 'number',
+          description: 'Start grid vertex column. Alternative to x1/y1.',
+        },
+        fromRow: {
+          type: 'number',
+          description: 'Start grid vertex row. Alternative to x1/y1.',
+        },
+        toCol: {
+          type: 'number',
+          description: 'End grid vertex column. Alternative to x2/y2.',
+        },
+        toRow: {
+          type: 'number',
+          description: 'End grid vertex row. Alternative to x2/y2.',
+        },
+        type: {
+          type: 'string',
+          enum: ['wall', 'door', 'secretDoor', 'terrain', 'invisible', 'ethereal'],
+          description:
+            'Wall nature (default "wall"): wall = solid; door = openable, starts closed; secretDoor = hidden until discovered, starts closed; terrain = blocks movement, sight blocks only on the second crossing; invisible = blocks movement, not sight; ethereal = blocks sight, not movement',
+        },
+      },
+      required: ['sceneId'],
+    },
+  },
+  {
+    name: 'delete_wall',
+    description:
+      'Remove a Wall from a scene. Use when: undoing a placement mistake, or opening up a room by removing a wall segment entirely (as opposed to opening a door - use set_door_state to keep the wall and just toggle it). Do not use when: you want to remove a tile or token instead - this only affects Wall documents. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene the wall is on',
+        },
+        wallId: {
+          type: 'string',
+          description: 'The ID of the wall to remove',
+        },
+      },
+      required: ['sceneId', 'wallId'],
+    },
+  },
+  {
+    name: 'set_door_state',
+    description:
+      "Open, close, or lock a door (a Wall document with door !== 0). Use when: a party opens or shuts a door, or a door should be locked/unlocked. Do not use when: you don't have the wallId - use list_walls, or ask the user, or read the foundry://scenes resource. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        wallId: {
+          type: 'string',
+          description: 'The ID of the door (Wall document) to change',
+        },
+        state: {
+          type: 'number',
+          enum: [0, 1, 2],
+          description: '0 = closed, 1 = open, 2 = locked',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID to scope the wall lookup',
+        },
+      },
+      required: ['wallId', 'state'],
+    },
+  },
+];
+
+/**
+ * Tile read tool definitions
+ *
+ * All three are pure reads over cached worldData or the local filesystem
+ * (list_scene_assets, requires FOUNDRY_DATA_PATH) — no FOUNDRY_WRITE_ENABLED
+ * needed. Together they let a scene be decorated without a `capture_scene`
+ * screenshot: browse available art, find where it's safe to place, check
+ * what's already down.
+ */
+export const tileTools = [
+  {
+    name: 'list_scene_assets',
+    description:
+      'List image assets (map backgrounds, prop/token art) under a folder of the FoundryVTT Data directory, with real pixel dimensions and any `[Tag, Tag]`-bracketed keyword tags parsed out of the filename (the naming convention several battlemap packs use). Requires FOUNDRY_DATA_PATH — this server must run on the same host as FoundryVTT. Use when: choosing a background for create_scene, or browsing available decoration art for create_tile before placing anything. Do not use when: FOUNDRY_DATA_PATH is not set - this always returns empty in that case.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        subdir: {
+          type: 'string',
+          description: 'Data-relative folder to scan (default "assets")',
+        },
+        query: {
+          type: 'string',
+          description: 'Optional case-insensitive substring filter on filename or parsed tags',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum results to return (default 200)',
+        },
+        kind: {
+          type: 'string',
+          enum: ['image', 'audio'],
+          description: 'Asset category to scan for: "image" (default) or "audio"',
+          default: 'image',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_tiles',
+    description:
+      'List the Tiles placed on a scene (id, image src, position, size, rotation, hidden), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no capture_scene screenshot needed to see current decoration state. Use when: checking what is already placed before adding more, or getting a tileId for delete_tile. Do not use when: you need token positions instead of tile positions - tiles and tokens are separate document types; this only lists tiles.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'find_open_cells',
+    description:
+      "Scan a scene's grid for cells with no wall crossing them and no existing tile/token already centred there - a placement candidate list for create_tile/spawn_token that needs no screenshot to compute. Restricted to the background image's own extent; the scene's padding margin is never returned as floor. Use when: deciding where to place a new tile or token without visual inspection. Do not use when: you already have a specific target position in mind - this is for open-ended 'somewhere sensible' placement, not for verifying one exact spot.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to scan',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum open cells to return (default 50)',
+        },
+      },
+      required: ['sceneId'],
+    },
+  },
+];
+
+/**
+ * Tile mutation tool definitions
+ *
+ * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active
+ * Socket.IO connection (mutations use the core `modifyDocument` protocol).
+ */
+export const tileMutationTools = [
+  {
+    name: 'create_tile',
+    description:
+      "Place a decorative Tile on a scene from an image already present under FoundryVTT's Data directory (see list_scene_assets). Width/height default to the image's real pixel dimensions when not given. Position is either explicit pixel x/y (top-left corner) or a gridCol/gridRow cell (the tile is centred in that cell - see find_open_cells for candidates). By default refuses to place a tile whose bounding box crosses a scene wall; pass allowWallOverlap: true to place anyway (e.g. a wall-mounted prop). Use when: decorating a scene with scenery (crates, dumpsters, vehicles, graffiti) that is not a creature or NPC. Do not use when: the object is a creature/NPC that should have HP and act in combat - use create_world_actor + spawn_token instead. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene to place the tile on',
+        },
+        src: {
+          type: 'string',
+          description: 'Data-relative path to the tile image, as returned by list_scene_assets',
+        },
+        x: {
+          type: 'number',
+          description: 'Target top-left x pixel coordinate. Alternative to gridCol/gridRow.',
+        },
+        y: {
+          type: 'number',
+          description: 'Target top-left y pixel coordinate. Alternative to gridCol/gridRow.',
+        },
+        gridCol: {
+          type: 'number',
+          description: 'Grid column to centre the tile in. Alternative to x/y.',
+        },
+        gridRow: {
+          type: 'number',
+          description: 'Grid row to centre the tile in. Alternative to x/y.',
+        },
+        width: {
+          type: 'number',
+          description: "Optional explicit pixel width; defaults to the image's real width",
+        },
+        height: {
+          type: 'number',
+          description: "Optional explicit pixel height; defaults to the image's real height",
+        },
+        rotation: {
+          type: 'number',
+          description: 'Optional rotation in degrees (default 0)',
+        },
+        elevation: {
+          type: 'number',
+          description: 'Optional elevation (default 0)',
+        },
+        hidden: {
+          type: 'boolean',
+          description: 'Optional; true to place the tile hidden from players',
+        },
+        allowWallOverlap: {
+          type: 'boolean',
+          description:
+            'Optional; true to allow placement even if the bounding box crosses a wall (default false - refuses)',
+        },
+      },
+      required: ['sceneId', 'src'],
+    },
+  },
+  {
+    name: 'delete_tile',
+    description:
+      'Remove a Tile from a scene. Use when: undoing a placement mistake, or clearing decoration that no longer fits the scene. Do not use when: you want to remove a token or actor instead - this only affects Tile documents; use delete_token or delete_world_actor. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'The ID of the scene the tile is on',
+        },
+        tileId: {
+          type: 'string',
+          description: 'The ID of the tile to remove',
+        },
+      },
+      required: ['sceneId', 'tileId'],
+    },
+  },
+];
+/**
+ * Placeable read tools (lights, sounds, notes, drawings, templates).
+ * Pure reads over cached worldData — no write gate.
+ */
+export const placeableTools = [
+  {
+    name: 'list_lights',
+    description:
+      'List the AmbientLight sources placed on a scene (id, position, dim/bright radius, color, rotation, animation, hidden), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: inspecting scene lighting or finding a lightId for update_light/delete_light.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_sounds',
+    description:
+      'List the AmbientSound sources placed on a scene (id, position, radius, audio path, volume, repeat, hidden), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: inspecting ambient audio or finding a soundId for delete_sound.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_notes',
+    description:
+      'List the Map Notes (journal pins) placed on a scene (id, position, label text, linked journal entry and page, global visibility), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: finding pins on the map or getting a noteId for delete_note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_drawings',
+    description:
+      'List the Drawings placed on a scene (id, shape type, position, dimensions/radius, text label, colors, hidden, locked), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: inspecting canvas shapes or finding a drawingId for delete_drawing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_templates',
+    description:
+      'List the Measured Templates (AOE spell/effect shapes) placed on a scene (id, template type, position, distance, direction, angle, width, colors, hidden), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: inspecting active spell areas or finding a templateId for delete_template.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+];
+
+/**
+ * Placeable mutation tools (lights, sounds, notes, drawings, templates).
+ * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active Socket.IO connection.
+ */
+export const placeableMutationTools = [
+  {
+    name: 'create_light',
+    description:
+      'Create a new AmbientLight source on a scene at either pixel x/y or a gridCol/gridRow cell (the light is centered in that cell). Supports dim/bright radii, color hex tint (#rrggbb), angle, rotation, and animation presets (e.g. torch, pulse, chroma). ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+        x: { type: 'number', description: 'Pixel x coordinate (center)' },
+        y: { type: 'number', description: 'Pixel y coordinate (center)' },
+        gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
+        gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
+        dim: { type: 'number', description: 'Dim light radius in grid units (default 0)', default: 0 },
+        bright: { type: 'number', description: 'Bright light radius in grid units (default 0)', default: 0 },
+        color: { type: 'string', description: 'Light color as a 6-digit hex string (e.g. "#ff8800")' },
+        angle: { type: 'number', description: 'Light emission angle in degrees (default 360)', default: 360 },
+        rotation: { type: 'number', description: 'Light rotation in degrees (default 0)', default: 0 },
+        animationType: { type: 'string', description: 'Optional animation type (e.g. "torch", "pulse", "chroma", "wave")' },
+        animationSpeed: { type: 'number', description: 'Animation speed 0-10 (default 5)', default: 5 },
+        animationIntensity: { type: 'number', description: 'Animation intensity 1-10 (default 5)', default: 5 },
+        walls: { type: 'boolean', description: 'Whether light is constrained by walls (default true)', default: true },
+        vision: { type: 'boolean', description: 'Whether this light provides vision to tokens (default false)', default: false },
+        hidden: { type: 'boolean', description: 'Whether the light source is hidden (default false)', default: false },
+      },
+    },
+  },
+  {
+    name: 'update_light',
+    description:
+      'Update an existing AmbientLight source on a scene (radii, color, position, angle, animation, walls/vision/hidden). ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lightId: { type: 'string', description: 'The ID of the ambient light to update' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+        x: { type: 'number', description: 'New pixel x coordinate' },
+        y: { type: 'number', description: 'New pixel y coordinate' },
+        dim: { type: 'number', description: 'Dim light radius in grid units' },
+        bright: { type: 'number', description: 'Bright light radius in grid units' },
+        color: { type: 'string', description: 'Light color as a 6-digit hex string (e.g. "#ff8800")' },
+        angle: { type: 'number', description: 'Light emission angle in degrees' },
+        rotation: { type: 'number', description: 'Light rotation in degrees' },
+        walls: { type: 'boolean', description: 'Whether light is constrained by walls' },
+        vision: { type: 'boolean', description: 'Whether this light provides vision' },
+        hidden: { type: 'boolean', description: 'Whether the light source is hidden' },
+      },
+      required: ['lightId'],
+    },
+  },
+  {
+    name: 'delete_light',
+    description:
+      'Permanently remove an AmbientLight from a scene. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lightId: { type: 'string', description: 'The ID of the ambient light to delete' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+      },
+      required: ['lightId'],
+    },
+  },
+  {
+    name: 'create_sound',
+    description:
+      'Create an AmbientSound source on a scene from an audio file path (browse available audio via list_scene_assets with kind="audio"). Placement is either pixel x/y or a gridCol/gridRow cell. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Audio file path (e.g. "assets/audio/rain.mp3")' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+        x: { type: 'number', description: 'Pixel x coordinate (center)' },
+        y: { type: 'number', description: 'Pixel y coordinate (center)' },
+        gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
+        gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
+        radius: { type: 'number', description: 'Audible radius in grid units (default 0)', default: 0 },
+        volume: { type: 'number', description: 'Playback volume 0.0 to 1.0 (default 0.5)', default: 0.5 },
+        repeat: { type: 'boolean', description: 'Whether the audio loops continuously (default false)', default: false },
+        walls: { type: 'boolean', description: 'Whether sound is blocked by walls (default true)', default: true },
+        easing: { type: 'boolean', description: 'Whether volume fades towards the boundary (default true)', default: true },
+        hidden: { type: 'boolean', description: 'Whether the sound is hidden/disabled (default false)', default: false },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'delete_sound',
+    description:
+      'Permanently remove an AmbientSound from a scene. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        soundId: { type: 'string', description: 'The ID of the ambient sound to delete' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+      },
+      required: ['soundId'],
+    },
+  },
+  {
+    name: 'create_note',
+    description:
+      'Place a Map Note (journal pin) on a scene at pixel x/y or a gridCol/gridRow cell. Must link to an entryId (journal entry), provide text (standalone label), or both. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+        entryId: { type: 'string', description: 'Optional JournalEntry document ID to link to this pin' },
+        pageId: { type: 'string', description: 'Optional JournalEntryPage ID within the linked entry' },
+        text: { type: 'string', description: 'Optional label text displayed below or on the pin' },
+        x: { type: 'number', description: 'Pixel x coordinate (center)' },
+        y: { type: 'number', description: 'Pixel y coordinate (center)' },
+        gridCol: { type: 'number', description: 'Grid column (centers in cell)' },
+        gridRow: { type: 'number', description: 'Grid row (centers in cell)' },
+        iconSize: { type: 'number', description: 'Pin icon size in pixels (minimum 32, default 40)', default: 40 },
+        fontSize: { type: 'number', description: 'Label font size in pixels (8-128, default 32)', default: 32 },
+        textAnchor: { type: 'number', description: 'Text anchor point: 0 (center), 1 (bottom/default), 2 (top), 3 (left), 4 (right)', default: 1 },
+        global: { type: 'boolean', description: 'Whether the note is visible regardless of fog/vision (default false)', default: false },
+      },
+    },
+  },
+  {
+    name: 'delete_note',
+    description:
+      'Permanently remove a Map Note pin from a scene (does not delete the linked journal entry). ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        noteId: { type: 'string', description: 'The ID of the map note to delete' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+      },
+      required: ['noteId'],
+    },
+  },
+  {
+    name: 'create_drawing',
+    description:
+      'Create a Drawing shape on a scene (rectangle "r", circle "c", ellipse "e", or polygon "p") with optional text, fill, and stroke styling. Position x, y is the top-left corner of the shape. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        x: { type: 'number', description: 'Pixel x coordinate (top-left)' },
+        y: { type: 'number', description: 'Pixel y coordinate (top-left)' },
+        shape: { type: 'string', enum: ['r', 'c', 'e', 'p'], description: 'Shape type: "r" (rectangle, default), "c" (circle), "e" (ellipse), "p" (polygon)', default: 'r' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+        width: { type: 'number', description: 'Width in pixels (required for "r" and "e")' },
+        height: { type: 'number', description: 'Height in pixels (required for "r" and "e")' },
+        radius: { type: 'number', description: 'Radius in pixels (required for "c")' },
+        points: { type: 'array', items: { type: 'number' }, description: 'Array of coordinates [x1, y1, x2, y2, ...] with at least 3 points (required for "p")' },
+        rotation: { type: 'number', description: 'Rotation in degrees (default 0)', default: 0 },
+        strokeColor: { type: 'string', description: 'Stroke color as a 6-digit hex string (e.g. "#ffffff")' },
+        strokeWidth: { type: 'number', description: 'Stroke line width in pixels (default 8)', default: 8 },
+        fillType: { type: 'number', enum: [0, 1, 2], description: 'Fill type: 0 (none), 1 (solid), 2 (pattern)' },
+        fillColor: { type: 'string', description: 'Fill color as a 6-digit hex string (e.g. "#336699")' },
+        fillAlpha: { type: 'number', description: 'Fill opacity 0.0 to 1.0 (default 0.5)', default: 0.5 },
+        text: { type: 'string', description: 'Optional text label displayed inside the drawing' },
+        fontSize: { type: 'number', description: 'Font size in pixels (8-256, default 48)', default: 48 },
+        hidden: { type: 'boolean', description: 'Whether the drawing is hidden from players (default false)', default: false },
+        locked: { type: 'boolean', description: 'Whether the drawing is locked from interaction (default false)', default: false },
+      },
+      required: ['x', 'y'],
+    },
+  },
+  {
+    name: 'delete_drawing',
+    description:
+      'Permanently remove a Drawing from a scene. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        drawingId: { type: 'string', description: 'The ID of the drawing to delete' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+      },
+      required: ['drawingId'],
+    },
+  },
+  {
+    name: 'create_template',
+    description:
+      'Place a Measured Template (spell/area-of-effect shape: "circle", "cone", "rect", "ray") on a scene at pixel x/y or a gridCol/gridRow cell. Distance is specified in scene grid units (e.g. metres or feet). ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        distance: { type: 'number', description: 'Effect distance/radius in grid units (e.g. 6m or 30ft)' },
+        t: { type: 'string', enum: ['circle', 'cone', 'rect', 'ray'], description: 'Template type (default "circle")', default: 'circle' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+        x: { type: 'number', description: 'Pixel x coordinate (origin point)' },
+        y: { type: 'number', description: 'Pixel y coordinate (origin point)' },
+        gridCol: { type: 'number', description: 'Grid column (centers origin in cell)' },
+        gridRow: { type: 'number', description: 'Grid row (centers origin in cell)' },
+        direction: { type: 'number', description: 'Direction angle in degrees (0 = right, 90 = down; required for cone/ray/rect)', default: 0 },
+        angle: { type: 'number', description: 'Cone spread angle in degrees (required for cone, e.g. 45 or 53.13)', default: 0 },
+        width: { type: 'number', description: 'Ray line width in grid units (required for ray)', default: 0 },
+        borderColor: { type: 'string', description: 'Border color as a 6-digit hex string' },
+        fillColor: { type: 'string', description: 'Fill color as a 6-digit hex string' },
+        hidden: { type: 'boolean', description: 'Whether the template is hidden from players (default false)', default: false },
+      },
+      required: ['distance'],
+    },
+  },
+  {
+    name: 'delete_template',
+    description:
+      'Permanently remove a Measured Template area-of-effect shape from a scene. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        templateId: { type: 'string', description: 'The ID of the measured template to delete' },
+        sceneId: { type: 'string', description: 'Optional Scene ID; defaults to the active scene' },
+      },
+      required: ['templateId'],
+    },
+  },
+];
 /**
  * Content generation tool definitions
  */
@@ -398,17 +1273,13 @@ export const generationTools = [
   {
     name: 'lookup_rule',
     description:
-      'Stub: builds a templated placeholder from the query and consults no rules source, so the text it returns carries no rules content. No tool in this server looks rules up.',
+      'Search rules and mechanics across world journals and compendium journal packs. Compendium search requires the companion Foundry module.',
     inputSchema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
-          description: 'Rule or mechanic to look up',
-        },
-        system: {
-          type: 'string',
-          description: 'Game system (D&D 5e, Pathfinder, etc.)',
+          description: 'Rule, keyword, or mechanic to look up',
         },
       },
       required: ['query'],
@@ -484,13 +1355,18 @@ export const diagnosticsTools = [
   {
     name: 'diagnose_errors',
     description:
-      'Stub: returns a fixed "no errors detected" summary regardless of input; real diagnostic logic is not implemented, so the summary reflects nothing about the server. For actual log content use get_recent_logs.',
+      'Retrieve error diagnosis and health analysis from the FoundryVTT server logs via the REST API module (FOUNDRY_API_KEY). Reports error categories, health score, actionable suggestions, and recent errors.',
     inputSchema: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
-          description: 'Error category to focus on',
+          description: 'Optional error category to filter summary and logs (e.g. "socket", "database")',
+        },
+        timeframe: {
+          type: 'number',
+          description: 'Timeframe in seconds to analyze (default 3600)',
+          default: 3600,
         },
       },
     },
@@ -605,6 +1481,27 @@ export const combatMutationTools = [
 ];
 
 /**
+ * Token read tools (query-only; mirrors list_walls/list_tiles). No
+ * FOUNDRY_WRITE_ENABLED gate - these only read the cached worldData.
+ */
+export const tokenTools = [
+  {
+    name: 'list_tokens',
+    description:
+      "List the Tokens placed on a scene (id, display name, linked actorId, x/y pixel position, width/height in grid cells, elevation, rotation, hidden, disposition), defaulting to the active scene when sceneId is omitted. Read from cached worldData - no canvas access needed. Use when: you need to know what's on the map and where before moving, targeting, or applying an effect to a token, or to resolve a token's id from its name instead of asking the user. Do not use when: you need wall or tile layout instead - use list_walls/list_tiles.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+      },
+    },
+  },
+];
+
+/**
  * Token manipulation mutation tool definitions (FR-019)
  *
  * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active Socket.IO
@@ -615,7 +1512,7 @@ export const tokenMutationTools = [
   {
     name: 'move_token',
     description:
-      "Move a token to new x/y pixel coordinates on its scene; the token is located across scenes by id, optionally scoped with sceneId. Coordinates are absolute pixels, not grid squares and not offsets. Use when: repositioning a token to a position the user has given you. Do not use when: you would have to guess the destination - no tool in this server reports a token's current position or the scene grid size, so ask the user for the target coordinates rather than inferring them. " +
+      'Move a token to new x/y pixel coordinates on its scene; the token is located across scenes by id, optionally scoped with sceneId. Coordinates are absolute pixels, not grid squares and not offsets. Use when: repositioning a token to a position the user has given you, or one computed from list_tokens (current positions) and get_scene_info (grid size). Do not use when: repositioning several tokens at once - use move_tokens; or the destination may be blocked by a wall/door - use move_token_pathfind, which routes around them instead of teleporting through. ' +
       WRITE_GATE,
     inputSchema: {
       type: 'object',
@@ -670,6 +1567,202 @@ export const tokenMutationTools = [
       required: ['tokenId', 'statusId'],
     },
   },
+  {
+    name: 'spawn_token',
+    description:
+      "Place a new token for an existing actor onto a scene at given x/y pixel coordinates, defaulting to the active scene when sceneId is omitted. Base display fields (texture, size, vision) are seeded from the actor's prototypeToken. Use when: a monster, NPC, or reinforcement needs to appear on the map. Do not use when: repositioning a token that is already on the scene - use move_token. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        actorId: {
+          type: 'string',
+          description: 'The ID of the actor the new token represents',
+        },
+        x: {
+          type: 'number',
+          description: 'Target x pixel coordinate on the scene',
+        },
+        y: {
+          type: 'number',
+          description: 'Target y pixel coordinate on the scene',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID; defaults to the active scene',
+        },
+        name: {
+          type: 'string',
+          description: "Optional display name override; defaults to the actor's name",
+        },
+        hidden: {
+          type: 'boolean',
+          description: 'Optional; true to place the token hidden from players',
+        },
+      },
+      required: ['actorId', 'x', 'y'],
+    },
+  },
+  {
+    name: 'delete_token',
+    description:
+      "Remove a token from a scene without deleting the underlying actor. Use when: a monster is defeated and removed from the battle, or a token was placed by mistake. Do not use when: the actor document itself should be deleted - use delete_world_actor; this only removes the token's placement on the map. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokenId: {
+          type: 'string',
+          description: 'The ID of the token to remove',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID to scope the token lookup',
+        },
+      },
+      required: ['tokenId'],
+    },
+  },
+  {
+    name: 'move_token_pathfind',
+    description:
+      "Move a token to x/y coordinates, routing around impassable walls when the direct line is blocked (A* pathfinding over the scene's Wall geometry), and — unless openDoors is false — opening any closed doors the route needs to cross. Slower and more expensive than move_token (issues one document update per waypoint, with a short pause per door opened), and its wall detection covers ordinary geometric walls only, not anything canvas-only would also enforce (terrain height, drawing-based obstacles). Use when: a token should walk realistically around obstacles instead of teleporting through them, especially when doors are involved. Do not use when: the destination is in the open with nothing between - use move_token, which is one write instead of many. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokenId: {
+          type: 'string',
+          description: 'The ID of the token to move',
+        },
+        x: {
+          type: 'number',
+          description: 'Target x pixel coordinate on the scene',
+        },
+        y: {
+          type: 'number',
+          description: 'Target y pixel coordinate on the scene',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID to scope the token lookup',
+        },
+        openDoors: {
+          type: 'boolean',
+          description: 'Whether to open closed doors blocking the route (default true)',
+          default: true,
+        },
+      },
+      required: ['tokenId', 'x', 'y'],
+    },
+  },
+  {
+    name: 'move_tokens',
+    description:
+      "Move several tokens in a single call - direct by default (like move_token), or wall-aware pathfinding per move when pathfind=true (like move_token_pathfind). Best-effort: one bad move (unknown tokenId, no route found, a rejected write) is reported in a failure list rather than losing moves that already succeeded. Use when: repositioning a whole party or group of NPCs at once - e.g. moving everyone into a room, or resetting an encounter's starting positions - instead of one move_token/move_token_pathfind call per token. Do not use when: moving a single token - move_token/move_token_pathfind is simpler. " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        moves: {
+          type: 'array',
+          description: 'One or more token moves to perform in this call',
+          items: {
+            type: 'object',
+            properties: {
+              tokenId: {
+                type: 'string',
+                description: 'The ID of the token to move',
+              },
+              x: {
+                type: 'number',
+                description: 'Target x pixel coordinate on the scene',
+              },
+              y: {
+                type: 'number',
+                description: 'Target y pixel coordinate on the scene',
+              },
+              sceneId: {
+                type: 'string',
+                description: 'Optional Scene ID to scope the token lookup',
+              },
+              pathfind: {
+                type: 'boolean',
+                description:
+                  'Route around walls/doors instead of a straight line, like move_token_pathfind (default false)',
+                default: false,
+              },
+              openDoors: {
+                type: 'boolean',
+                description:
+                  'When pathfind is true, whether to open closed doors blocking the route (default true)',
+                default: true,
+              },
+            },
+            required: ['tokenId', 'x', 'y'],
+          },
+          minItems: 1,
+        },
+      },
+      required: ['moves'],
+    },
+  },
+  {
+    name: 'update_token_vision',
+    description:
+      "Update an existing placed token's vision and/or light emission properties (sight range, angle, vision mode, light dim/bright radii, color tint, angle, animation). " +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tokenId: {
+          type: 'string',
+          description: 'The ID of the token to update',
+        },
+        sceneId: {
+          type: 'string',
+          description: 'Optional Scene ID to scope the token lookup',
+        },
+        sightEnabled: {
+          type: 'boolean',
+          description: 'Whether vision is enabled for this token (automatically set true if sightRange > 0)',
+        },
+        sightRange: {
+          type: 'number',
+          description: 'Token vision range in grid units',
+        },
+        sightAngle: {
+          type: 'number',
+          description: 'Vision cone angle in degrees (default 360)',
+        },
+        visionMode: {
+          type: 'string',
+          description: 'Vision mode id (e.g. "basic", "darkvision")',
+        },
+        lightDim: {
+          type: 'number',
+          description: 'Dim light emission radius in grid units',
+        },
+        lightBright: {
+          type: 'number',
+          description: 'Bright light emission radius in grid units',
+        },
+        lightColor: {
+          type: 'string',
+          description: 'Light emission color as a 6-digit hex string (e.g. "#ff8800")',
+        },
+        lightAngle: {
+          type: 'number',
+          description: 'Light emission angle in degrees (default 360)',
+        },
+        lightAnimationType: {
+          type: 'string',
+          description: 'Light animation type (e.g. "torch", "pulse", "chroma")',
+        },
+      },
+      required: ['tokenId'],
+    },
+  },
 ];
 
 /**
@@ -691,6 +1784,46 @@ export const chatTools = [
           maximum: 100,
         },
       },
+    },
+  },
+];
+
+/**
+ * Chat message mutation tool definitions
+ *
+ * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active
+ * Socket.IO connection (mutations use the core `modifyDocument` protocol).
+ */
+export const chatMutationTools = [
+  {
+    name: 'send_chat_message',
+    description:
+      'Post a message to the FoundryVTT chat log, optionally under a custom speaker name, whispered to specific users, and/or styled as out-of-character, in-character, or an emote (default: a plain system-style message). Use when: narrating a scene, speaking as an NPC, or sending a player a private clue. Do not use when: you only need to read recent chat - use get_chat_messages. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: 'Message body (HTML or plain text)',
+        },
+        speaker: {
+          type: 'string',
+          description: 'Optional display name shown as the speaker (e.g. an NPC name)',
+        },
+        whisperTo: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of User document ids to whisper the message to privately',
+        },
+        style: {
+          type: 'string',
+          enum: ['ooc', 'ic', 'emote'],
+          description:
+            "Message style. Omit for a plain message; 'ooc' out-of-character, 'ic' in-character, 'emote' an emote/action line.",
+        },
+      },
+      required: ['content'],
     },
   },
 ];
@@ -800,6 +1933,24 @@ export const journalMutationTools = [
       required: ['name', 'pages'],
     },
   },
+  {
+    name: 'delete_journal_entry',
+    description:
+      'Permanently delete a journal entry. Use when: the user explicitly asks to remove outdated notes or a handout. Do not use when: only the content needs to change - no update tool exists for journal pages; create a replacement with create_journal_entry instead. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        journalId: {
+          type: 'string',
+          description: 'The ID of the journal entry to delete',
+        },
+      },
+      required: ['journalId'],
+    },
+  },
 ];
 
 /**
@@ -847,6 +1998,403 @@ export const worldTools = [
 ];
 
 /**
+ * World document read tools (folders, macros, playlists).
+ */
+export const worldDocumentTools = [
+  {
+    name: 'list_folders',
+    description:
+      'List sidebar folders in the world (id, name, document type, parent folder id, color), optionally filtered by document type (Actor, Item, Scene, JournalEntry, Playlist, RollTable, Cards, Macro, Compendium).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        type: {
+          type: 'string',
+          description: 'Optional document type filter (e.g. "Actor", "JournalEntry", "Item")',
+        },
+      },
+    },
+  },
+  {
+    name: 'list_macros',
+    description:
+      'List Macro documents in the world (id, name, type script/chat, scope, folder, command preview). Use when: discovering available macros or finding a macroId for delete_macro.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'list_playlists',
+    description:
+      'List Audio Playlists in the world (id, name, playing state, mode sequential/shuffle/simultaneous, channel, sound track list). Use when: checking background music/ambience state or getting ids for set_playlist_state.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+];
+
+/**
+ * World document mutation tools (folders, macros, playlists).
+ * WRITE operations — require FOUNDRY_WRITE_ENABLED=true and an active Socket.IO connection.
+ */
+export const worldDocumentMutationTools = [
+  {
+    name: 'create_folder',
+    description:
+      'Create a new sidebar Folder document to organize actors, items, scenes, journals, playlists, tables, or macros. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Folder display name' },
+        type: {
+          type: 'string',
+          description:
+            'Document type this folder contains: "Actor", "Item", "Scene", "JournalEntry", "Playlist", "RollTable", "Cards", "Macro", or "Compendium"',
+        },
+        parent: { type: 'string', description: 'Optional parent Folder ID for nested folder hierarchies' },
+        color: { type: 'string', description: 'Optional folder color as a 6-digit hex string (e.g. "#ff0000")' },
+        sorting: { type: 'string', enum: ['a', 'm'], description: 'Sorting mode: "a" (alphabetical, default) or "m" (manual)', default: 'a' },
+      },
+      required: ['name', 'type'],
+    },
+  },
+  {
+    name: 'create_macro',
+    description:
+      'Create a new Macro document (script or chat). Authors and manages the document only — this server has no tool that executes a macro (deliberate security boundary: no arbitrary JS execution in GM browser). ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Macro display name' },
+        type: { type: 'string', enum: ['script', 'chat'], description: 'Macro type: "script" (JavaScript) or "chat" (chat command)' },
+        command: { type: 'string', description: 'Macro command content/script body' },
+        folder: { type: 'string', description: 'Optional Folder ID to file the macro under' },
+        img: { type: 'string', description: 'Optional icon image path' },
+        scope: { type: 'string', enum: ['global', 'actors', 'actor'], description: 'Macro execution scope (default "global")', default: 'global' },
+      },
+      required: ['name', 'type', 'command'],
+    },
+  },
+  {
+    name: 'delete_macro',
+    description:
+      'Permanently delete a Macro document from the world. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        macroId: { type: 'string', description: 'The ID of the macro to delete' },
+      },
+      required: ['macroId'],
+    },
+  },
+  {
+    name: 'create_playlist',
+    description:
+      'Create a new audio Playlist document with optional starting sound tracks. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Playlist display name' },
+        description: { type: 'string', description: 'Optional playlist description' },
+        mode: {
+          type: 'number',
+          enum: [-1, 0, 1, 2],
+          description: 'Playback mode: -1 (soundboard/disabled), 0 (sequential/default), 1 (shuffle), 2 (simultaneous)',
+          default: 0,
+        },
+        channel: {
+          type: 'string',
+          enum: ['music', 'environment', 'interface'],
+          description: 'Audio channel (default "music")',
+          default: 'music',
+        },
+        fade: { type: 'number', description: 'Fade duration in milliseconds' },
+        folder: { type: 'string', description: 'Optional Folder ID to file the playlist under' },
+        sounds: {
+          type: 'array',
+          description: 'Optional sound tracks to create on this playlist',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Track display name' },
+              path: { type: 'string', description: 'Audio file path (e.g. "assets/audio/bgm.mp3")' },
+              volume: { type: 'number', description: 'Track volume 0.0 to 1.0 (default 0.5)', default: 0.5 },
+              repeat: { type: 'boolean', description: 'Whether the track loops (default false)', default: false },
+            },
+            required: ['name', 'path'],
+          },
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'set_playlist_state',
+    description:
+      'Start or stop playback of an entire playlist or a specific sound track within it. Drives Foundry playback state; client autoplay policies may affect audio output. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        playlistId: { type: 'string', description: 'The ID of the playlist to control' },
+        playing: { type: 'boolean', description: 'true to start playback, false to stop' },
+        soundId: { type: 'string', description: 'Optional PlaylistSound ID to control a specific track instead of the entire playlist' },
+      },
+      required: ['playlistId', 'playing'],
+    },
+  },
+  {
+    name: 'delete_playlist',
+    description:
+      'Permanently delete an audio Playlist document and its contained sounds. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        playlistId: { type: 'string', description: 'The ID of the playlist to delete' },
+      },
+      required: ['playlistId'],
+    },
+  },
+];
+
+
+/**
+ * Roll table tool definitions
+ *
+ * Neither tool mutates the world; `roll_table` draws locally against cached
+ * table data and does not require FOUNDRY_WRITE_ENABLED.
+ */
+export const rollTableTools = [
+  {
+    name: 'list_roll_tables',
+    description:
+      "List the world's roll tables by name, result count, and id. Use when: you need a tableId for roll_table, or want to see what random tables are available. Do not use when: you already have the tableId - go straight to roll_table.",
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'roll_table',
+    description:
+      "Draw a result from a roll table by id, rolling the table's own formula (or a uniform range when it has none) and returning the matched entry. This is a local, read-only draw: unlike FoundryVTT's own table draw, it does not mark the result as drawn or honor a no-duplicates setting, so repeat draws can repeat a result. Use when: rolling on a random encounter, loot, or event table. Do not use when: you don't have a tableId - run list_roll_tables first.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tableId: {
+          type: 'string',
+          description: 'The ID of the roll table to draw from',
+        },
+      },
+      required: ['tableId'],
+    },
+  },
+  {
+    name: 'create_roll_table',
+    description:
+      'Create a new RollTable document with text results. Automatically assigns sequential ranges and a matching 1dN formula when ranges are omitted. ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Roll table display name' },
+        results: {
+          type: 'array',
+          description: 'List of text result entries for this table',
+          items: {
+            type: 'object',
+            properties: {
+              text: { type: 'string', description: 'Result text description' },
+              weight: { type: 'number', description: 'Relative weight (default 1)', default: 1 },
+              range: {
+                type: 'array',
+                items: { type: 'number' },
+                description: 'Optional roll range [low, high] (e.g. [1, 2]). Auto-assigned if omitted on all results.',
+              },
+            },
+            required: ['text'],
+          },
+          minItems: 1,
+        },
+        description: { type: 'string', description: 'Optional table description' },
+        formula: { type: 'string', description: 'Optional custom dice formula (e.g. "1d100" or "2d6")' },
+        replacement: { type: 'boolean', description: 'Whether drawn results are replaced (default true)', default: true },
+        displayRoll: { type: 'boolean', description: 'Whether the roll total is displayed in chat (default true)', default: true },
+        folder: { type: 'string', description: 'Optional Folder ID to file the table under' },
+      },
+      required: ['name', 'results'],
+    },
+  },
+  {
+    name: 'delete_roll_table',
+    description:
+      'Permanently delete a RollTable document from the world. ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'The ID of the roll table to delete' },
+      },
+      required: ['tableId'],
+    },
+  },
+];
+
+/**
+ * World settings tool definitions
+ */
+export const settingsTools = [
+  {
+    name: 'get_world_setting',
+    description:
+      'Read a world setting by its namespaced key (e.g. "cyberpunk-red-core.customSetting" or "simple-calendar.year"). If the setting has never been modified from its system/module default, exists will be false. Use when: inspecting world configuration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          description: 'The namespaced setting key in the format {scope}.{field}',
+        },
+      },
+      required: ['key'],
+    },
+  },
+  {
+    name: 'set_world_setting',
+    description:
+      'Update or create a world setting value for a system or module namespace (e.g. "cyberpunk-red-core.settingName"). Refuses writes to the "core.*" namespace (core settings control the Foundry client itself and can break the world; change those in the UI). ' +
+      CONFIRM_FIRST +
+      ' ' +
+      WRITE_GATE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: {
+          type: 'string',
+          description: 'The namespaced setting key in the format {scope}.{field} (non-core only)',
+        },
+        value: {
+          description: 'The value to store (JSON-serializable: string, number, boolean, object, or array)',
+        },
+      },
+      required: ['key', 'value'],
+    },
+  },
+];
+
+/**
+ * Module-bridge tool definitions
+ *
+ * Relayed through the companion Foundry module (a real, rendered browser
+ * tab) rather than FoundryVTT's own Socket.IO document API - the only path
+ * to canvas/PIXI-only capabilities. Requires FOUNDRY_MODULE_BRIDGE_ENABLED=true
+ * and the module installed, enabled, and connected; fails clearly otherwise.
+ */
+export const moduleBridgeTools = [
+  {
+    name: 'capture_scene',
+    description:
+      "Screenshot the active scene as seen on the GM's canvas, with a grid coordinate overlay (column,row per cell) burned in for spatial reasoning. Requires the companion Foundry module to be installed, enabled, and connected - fails with a clear error otherwise. Use when: you need to see the current map layout, token positions, or lighting to reason about it. Do not use when: you just need scene metadata (dimensions, darkness) - use get_scene_info, which needs no module.",
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'get_document_schema',
+    description:
+      "Introspect the connected game system's real DataModel schema for an Actor or Item type - the exact field names, types, string-enum choices, and default values that type accepts, read live from the running system (works for any installed system - Cyberpunk RED, D&D 5e, PF2e, etc - not a hardcoded list). Returns a nested JSON tree: each field has `type` (Number/String/Boolean/Schema/Array/…), `required`, `choices` for constrained strings, and `initial` for its default value; `fields` holds nested sub-fields, `element` describes an array's entries. Requires the companion Foundry module to be installed, enabled, and connected - fails with a clear error otherwise. Use when: building a `system` payload for create_world_actor/create_actor_item/create_full_actor and you do not already know that type's exact field names - call this once per type, then reuse the answer. Do not use when: you already know the schema from a prior call in this session - re-querying wastes a round trip; the schema does not change during a session.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        documentType: {
+          type: 'string',
+          enum: ['Actor', 'Item'],
+          description: 'Which document collection the type belongs to',
+        },
+        type: {
+          type: 'string',
+          description:
+            'The Actor or Item type to introspect (e.g. "character", "npc", "weapon", "spell") - system-specific; list valid types by trying an obviously-wrong one, or check get_world_summary/the system documentation',
+        },
+      },
+      required: ['documentType', 'type'],
+    },
+  },
+  {
+    name: 'search_compendium_content',
+    description:
+      'Search compendium packs by name and journal entry text content using the browser-rendered Foundry session. Returns pack IDs, document IDs, names, and text snippet matches. Requires the companion Foundry module to be installed, enabled, and connected. Use when: looking up rules or items in compendiums.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Text query to search for across pack names and journal contents',
+        },
+        packType: {
+          type: 'string',
+          description: 'Optional document type to restrict search to (default "JournalEntry", e.g. "Item", "Actor")',
+          default: 'JournalEntry',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default 20)',
+          default: 20,
+        },
+      },
+    },
+  },
+  {
+    name: 'roll_and_post',
+    description:
+      'Evaluate a dice formula using Foundry\'s native Roll engine and post it directly to chat as a rendered, clickable roll card. Supports full Foundry dice syntax (e.g. "4d6kh3", "1d20r1", exploding dice) that the local parser rejects. Requires the companion Foundry module.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        formula: {
+          type: 'string',
+          description: 'Dice formula to evaluate and post (e.g. "4d6kh3" or "2d6 + 5")',
+        },
+        flavor: {
+          type: 'string',
+          description: 'Optional flavor/context text displayed above the roll card',
+        },
+        speakerAlias: {
+          type: 'string',
+          description: 'Optional custom speaker alias displayed on the chat message',
+        },
+        whisperTo: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of User IDs to whisper the roll to privately',
+        },
+        rollMode: {
+          type: 'string',
+          enum: ['publicroll', 'gmroll', 'blindroll', 'selfroll'],
+          description: 'Roll visibility mode (default "publicroll")',
+          default: 'publicroll',
+        },
+      },
+      required: ['formula'],
+    },
+  },
+];
+
+/**
  * Get all tool definitions combined
  */
 export function getAllTools() {
@@ -858,15 +2406,28 @@ export function getAllTools() {
     ...compendiumTools,
     ...itemMutationTools,
     ...sceneTools,
+    ...sceneMutationTools,
+    ...wallMutationTools,
+    ...tileTools,
+    ...tileMutationTools,
     ...combatTools,
+    ...placeableTools,
+    ...placeableMutationTools,
     ...combatMutationTools,
+    ...tokenTools,
     ...tokenMutationTools,
     ...chatTools,
+    ...chatMutationTools,
     ...userTools,
     ...journalTools,
     ...journalMutationTools,
     ...worldTools,
+    ...worldDocumentTools,
+    ...worldDocumentMutationTools,
+    ...rollTableTools,
+    ...moduleBridgeTools,
     ...generationTools,
+    ...settingsTools,
     ...diagnosticsTools,
   ];
 }

@@ -10,9 +10,9 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import type { ModuleBridge } from '../../foundry/module-bridge.js';
 import type { ActorItemCreateSource } from '../../foundry/types.js';
 import { withToolError } from './utils.js';
-
 /**
  * Handles creating an item on an actor from a compendium reference or an inline
  * item document.
@@ -23,6 +23,7 @@ export async function handleCreateActorItem(
     source: ActorItemCreateSource;
   },
   foundryClient: FoundryClient,
+  moduleBridge: ModuleBridge | null = null,
 ) {
   const { actorId, source } = args;
 
@@ -48,7 +49,26 @@ export async function handleCreateActorItem(
   }
 
   return withToolError('create item', async () => {
-    const newItem = await foundryClient.createActorItem(actorId, source);
+    let effectiveSource: ActorItemCreateSource = source;
+    if (source.type === 'compendium') {
+      if (!moduleBridge) {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          'Creating an item from a compendium source requires the companion Foundry module. Set FOUNDRY_MODULE_BRIDGE_ENABLED=true and install the module, or provide an inline item.',
+        );
+      }
+      const rawDoc = (await moduleBridge.send('get_compendium_document', {
+        packId: source.compendiumId,
+        documentId: source.itemId,
+      })) as Record<string, unknown>;
+
+      const cleanDoc = { ...rawDoc };
+      delete cleanDoc._id;
+      delete cleanDoc._stats;
+      effectiveSource = { type: 'inline', item: cleanDoc };
+    }
+
+    const newItem = await foundryClient.createActorItem(actorId, effectiveSource);
 
     const origin =
       source.type === 'compendium'

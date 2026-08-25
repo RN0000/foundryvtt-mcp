@@ -4,7 +4,8 @@
 
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
-import type { AttributePatch, FoundryClient } from '../foundry/client.js';
+import type { AttributePatch, FoundryClient, WallType } from '../foundry/client.js';
+import type { ModuleBridge } from '../foundry/module-bridge.js';
 import type {
   ActorItemCreateSource,
   DocumentVisibility,
@@ -13,9 +14,19 @@ import type {
 import type { DiagnosticSystem } from '../utils/diagnostics.js';
 import { logger } from '../utils/logger.js';
 import type { ToolContext, ToolResult } from './base.js';
-import { handleUpdateActorAttribute } from './handlers/actor-mutations.js';
-import { handleGetActorDetails, handleSearchActors } from './handlers/actors.js';
+import {
+  handleCreateFullActor,
+  handleCreateWorldActor,
+  handleDeleteWorldActor,
+  handleUpdateActorAttribute,
+} from './handlers/actor-mutations.js';
+import {
+  handleGetActorDetails,
+  handleGetActorInventory,
+  handleSearchActors,
+} from './handlers/actors.js';
 import { handleGetChatMessages } from './handlers/chat.js';
+import { handleSendChatMessage } from './handlers/chat-mutations.js';
 import { handleGetCombatState } from './handlers/combat.js';
 import {
   handleEndCombat,
@@ -40,12 +51,88 @@ import {
   handleUpdateActorItem,
 } from './handlers/item-mutations.js';
 import { handleSearchItems } from './handlers/items.js';
-import { handleCreateJournalEntry } from './handlers/journal-mutations.js';
+import {
+  handleCreateJournalEntry,
+  handleDeleteJournalEntry,
+} from './handlers/journal-mutations.js';
 import { handleGetJournal, handleSearchJournals } from './handlers/journals.js';
+import {
+  handleCaptureScene,
+  handleGetDocumentSchema,
+  handleRollAndPost,
+  handleSearchCompendiumContent,
+} from './handlers/module-bridge.js';
 import { handleReadResource } from './handlers/resources.js';
-import { handleGetSceneInfo } from './handlers/scenes.js';
-import { handleApplyStatusEffect, handleMoveToken } from './handlers/token-mutations.js';
+import {
+  handleCreateRollTable,
+  handleDeleteRollTable,
+  handleListRollTables,
+  handleRollTable,
+} from './handlers/roll-tables.js';
+import {
+  handleCreateFolder,
+  handleCreateMacro,
+  handleCreatePlaylist,
+  handleDeleteMacro,
+  handleDeletePlaylist,
+  handleListFolders,
+  handleListMacros,
+  handleListPlaylists,
+  handleSetPlaylistState,
+} from './handlers/world-documents.js';
+import {
+  handleCreateScene,
+  handleDeleteScene,
+  handleResetFog,
+  handleSetSceneLighting,
+  handleSwitchScene,
+} from './handlers/scene-mutations.js';
+import {
+  handleFindOpenCells,
+  handleGetSceneInfo,
+  handleListDrawings,
+  handleListLights,
+  handleListNotes,
+  handleListSceneAssets,
+  handleListSounds,
+  handleListTemplates,
+  handleListTiles,
+  handleListTokens,
+  handleListWalls,
+} from './handlers/scenes.js';
+import {
+  handleCreateDrawing,
+  handleCreateLight,
+  handleCreateNote,
+  handleCreateSound,
+  handleCreateTemplate,
+  handleDeleteDrawing,
+  handleDeleteLight,
+  handleDeleteNote,
+  handleDeleteSound,
+  handleDeleteTemplate,
+  handleUpdateLight,
+} from './handlers/placeable-mutations.js';
+import {
+  handleGetWorldSetting,
+  handleSetWorldSetting,
+} from './handlers/settings.js';
+import { handleCreateTile, handleDeleteTile } from './handlers/tile-mutations.js';
+import {
+  handleApplyStatusEffect,
+  handleDeleteToken,
+  handleMoveToken,
+  handleMoveTokenPathfind,
+  handleMoveTokens,
+  handleSpawnToken,
+  handleUpdateTokenVision,
+} from './handlers/token-mutations.js';
 import { handleGetUsers } from './handlers/users.js';
+import {
+  handleCreateWall,
+  handleDeleteWall,
+  handleSetDoorState,
+} from './handlers/wall-mutations.js';
 import {
   handleGetWorldSummary,
   handleRefreshWorldData,
@@ -62,6 +149,7 @@ export async function routeToolRequest(
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
   diagnosticSystem: DiagnosticSystem,
+  moduleBridge: ModuleBridge | null = null,
 ): Promise<ToolResult> {
   logger.debug(`Routing tool request: ${name}`, { args });
 
@@ -102,6 +190,11 @@ export async function routeToolRequest(
         throw new Error('Missing required parameter: actorId');
       }
       return handleGetActorDetails(args as { actorId: string }, foundryClient);
+    case 'get_actor_inventory':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      return handleGetActorInventory(args as { actorId: string }, foundryClient);
 
     // Actor mutation tools (#143) — WRITE via the Socket.IO modifyDocument
     // protocol (foundryClient); require FOUNDRY_WRITE_ENABLED=true + a GM user.
@@ -116,6 +209,39 @@ export async function routeToolRequest(
         args as { actorId: string; patch: AttributePatch },
         foundryClient,
       );
+    case 'create_world_actor':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('type' in args) || typeof args.type !== 'string') {
+        throw new Error('Missing required parameter: type');
+      }
+      return handleCreateWorldActor(
+        args as { name: string; type: string; system?: Record<string, unknown>; folder?: string },
+        foundryClient,
+      );
+    case 'create_full_actor':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('type' in args) || typeof args.type !== 'string') {
+        throw new Error('Missing required parameter: type');
+      }
+      return handleCreateFullActor(
+        args as {
+          name: string;
+          type: string;
+          system?: Record<string, unknown>;
+          folder?: string;
+          items?: Array<{ name: string; type: string; system?: Record<string, unknown> }>;
+        },
+        foundryClient,
+      );
+    case 'delete_world_actor':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      return handleDeleteWorldActor(args as { actorId: string }, foundryClient);
 
     // Item tools
     case 'search_items':
@@ -154,6 +280,7 @@ export async function routeToolRequest(
       return handleCreateActorItem(
         args as { actorId: string; source: ActorItemCreateSource },
         foundryClient,
+        moduleBridge,
       );
     case 'update_actor_item':
       if (!('actorId' in args) || typeof args.actorId !== 'string') {
@@ -181,6 +308,317 @@ export async function routeToolRequest(
     // Scene tools
     case 'get_scene_info':
       return handleGetSceneInfo(args, foundryClient);
+    case 'create_scene':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('backgroundSrc' in args) || typeof args.backgroundSrc !== 'string') {
+        throw new Error('Missing required parameter: backgroundSrc');
+      }
+      return handleCreateScene(
+        args as {
+          name: string;
+          backgroundSrc: string;
+          width?: number;
+          height?: number;
+          gridSize?: number;
+          gridType?: number;
+          gridDistance?: number;
+          gridUnits?: string;
+          padding?: number;
+          backgroundColor?: string;
+          activate?: boolean;
+        },
+        foundryClient,
+      );
+    case 'switch_scene':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      return handleSwitchScene(args as { sceneId: string }, foundryClient);
+    case 'delete_scene':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      return handleDeleteScene(args as { sceneId: string }, foundryClient);
+    case 'set_scene_lighting':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      return handleSetSceneLighting(
+        args as {
+          sceneId: string;
+          darkness?: number;
+          globalLight?: boolean;
+          globalLightThreshold?: number;
+        },
+        foundryClient,
+      );
+    case 'reset_fog':
+      return handleResetFog(args as { sceneId?: string }, foundryClient);
+
+    // Tile read tools
+    case 'list_scene_assets':
+      return handleListSceneAssets(
+        args as { subdir?: string; query?: string; limit?: number },
+        foundryClient,
+      );
+    case 'list_tiles':
+      return handleListTiles(args as { sceneId?: string }, foundryClient);
+    case 'find_open_cells':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      return handleFindOpenCells(args as { sceneId: string; limit?: number }, foundryClient);
+
+    // Tile mutation tools
+    case 'create_tile':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      if (!('src' in args) || typeof args.src !== 'string') {
+        throw new Error('Missing required parameter: src');
+      }
+      return handleCreateTile(
+        args as {
+          sceneId: string;
+          src: string;
+          x?: number;
+          y?: number;
+          gridCol?: number;
+          gridRow?: number;
+          width?: number;
+          height?: number;
+          rotation?: number;
+          elevation?: number;
+          hidden?: boolean;
+          allowWallOverlap?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_tile':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      if (!('tileId' in args) || typeof args.tileId !== 'string') {
+        throw new Error('Missing required parameter: tileId');
+      }
+      return handleDeleteTile(args as { sceneId: string; tileId: string }, foundryClient);
+
+    // Wall (structural) tools
+    case 'list_walls':
+      return handleListWalls(args as { sceneId?: string }, foundryClient);
+    case 'create_wall':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      return handleCreateWall(
+        args as {
+          sceneId: string;
+          x1?: number;
+          y1?: number;
+          x2?: number;
+          y2?: number;
+          fromCol?: number;
+          fromRow?: number;
+          toCol?: number;
+          toRow?: number;
+          type?: WallType;
+        },
+        foundryClient,
+      );
+    case 'delete_wall':
+      if (!('sceneId' in args) || typeof args.sceneId !== 'string') {
+        throw new Error('Missing required parameter: sceneId');
+      }
+      if (!('wallId' in args) || typeof args.wallId !== 'string') {
+        throw new Error('Missing required parameter: wallId');
+      }
+      return handleDeleteWall(args as { sceneId: string; wallId: string }, foundryClient);
+    case 'set_door_state':
+      if (!('wallId' in args) || typeof args.wallId !== 'string') {
+        throw new Error('Missing required parameter: wallId');
+      }
+      if (!('state' in args) || typeof args.state !== 'number') {
+        throw new Error('Missing required parameter: state');
+      }
+      return handleSetDoorState(
+        args as { wallId: string; state: 0 | 1 | 2; sceneId?: string },
+        foundryClient,
+      );
+
+    // Placeable tools (read)
+    case 'list_lights':
+      return handleListLights(args as { sceneId?: string }, foundryClient);
+    case 'list_sounds':
+      return handleListSounds(args as { sceneId?: string }, foundryClient);
+    case 'list_notes':
+      return handleListNotes(args as { sceneId?: string }, foundryClient);
+    case 'list_drawings':
+      return handleListDrawings(args as { sceneId?: string }, foundryClient);
+    case 'list_templates':
+      return handleListTemplates(args as { sceneId?: string }, foundryClient);
+
+    // Placeable mutation tools (WRITE)
+    case 'create_light':
+      return handleCreateLight(
+        args as {
+          sceneId?: string;
+          x?: number;
+          y?: number;
+          gridCol?: number;
+          gridRow?: number;
+          dim?: number;
+          bright?: number;
+          color?: string;
+          angle?: number;
+          rotation?: number;
+          animationType?: string;
+          animationSpeed?: number;
+          animationIntensity?: number;
+          walls?: boolean;
+          vision?: boolean;
+          hidden?: boolean;
+        },
+        foundryClient,
+      );
+    case 'update_light':
+      if (!('lightId' in args) || typeof args.lightId !== 'string') {
+        throw new Error('Missing required parameter: lightId');
+      }
+      return handleUpdateLight(
+        args as {
+          lightId: string;
+          sceneId?: string;
+          x?: number;
+          y?: number;
+          dim?: number;
+          bright?: number;
+          color?: string;
+          angle?: number;
+          rotation?: number;
+          walls?: boolean;
+          vision?: boolean;
+          hidden?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_light':
+      if (!('lightId' in args) || typeof args.lightId !== 'string') {
+        throw new Error('Missing required parameter: lightId');
+      }
+      return handleDeleteLight(args as { lightId: string; sceneId?: string }, foundryClient);
+    case 'create_sound':
+      if (!('path' in args) || typeof args.path !== 'string') {
+        throw new Error('Missing required parameter: path');
+      }
+      return handleCreateSound(
+        args as {
+          path: string;
+          sceneId?: string;
+          x?: number;
+          y?: number;
+          gridCol?: number;
+          gridRow?: number;
+          radius?: number;
+          volume?: number;
+          repeat?: boolean;
+          walls?: boolean;
+          easing?: boolean;
+          hidden?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_sound':
+      if (!('soundId' in args) || typeof args.soundId !== 'string') {
+        throw new Error('Missing required parameter: soundId');
+      }
+      return handleDeleteSound(args as { soundId: string; sceneId?: string }, foundryClient);
+    case 'create_note':
+      return handleCreateNote(
+        args as {
+          sceneId?: string;
+          entryId?: string;
+          pageId?: string;
+          x?: number;
+          y?: number;
+          gridCol?: number;
+          gridRow?: number;
+          text?: string;
+          iconSize?: number;
+          fontSize?: number;
+          textAnchor?: number;
+          global?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_note':
+      if (!('noteId' in args) || typeof args.noteId !== 'string') {
+        throw new Error('Missing required parameter: noteId');
+      }
+      return handleDeleteNote(args as { noteId: string; sceneId?: string }, foundryClient);
+    case 'create_drawing':
+      if (!('x' in args) || typeof args.x !== 'number') {
+        throw new Error('Missing required parameter: x');
+      }
+      if (!('y' in args) || typeof args.y !== 'number') {
+        throw new Error('Missing required parameter: y');
+      }
+      return handleCreateDrawing(
+        args as {
+          shape?: 'r' | 'c' | 'e' | 'p';
+          x: number;
+          y: number;
+          sceneId?: string;
+          width?: number;
+          height?: number;
+          radius?: number;
+          points?: number[];
+          rotation?: number;
+          strokeColor?: string;
+          strokeWidth?: number;
+          fillType?: 0 | 1 | 2;
+          fillColor?: string;
+          fillAlpha?: number;
+          text?: string;
+          fontSize?: number;
+          hidden?: boolean;
+          locked?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_drawing':
+      if (!('drawingId' in args) || typeof args.drawingId !== 'string') {
+        throw new Error('Missing required parameter: drawingId');
+      }
+      return handleDeleteDrawing(args as { drawingId: string; sceneId?: string }, foundryClient);
+    case 'create_template':
+      if (!('distance' in args) || typeof args.distance !== 'number') {
+        throw new Error('Missing required parameter: distance');
+      }
+      return handleCreateTemplate(
+        args as {
+          distance: number;
+          sceneId?: string;
+          t?: 'circle' | 'cone' | 'rect' | 'ray';
+          x?: number;
+          y?: number;
+          gridCol?: number;
+          gridRow?: number;
+          direction?: number;
+          angle?: number;
+          width?: number;
+          borderColor?: string;
+          fillColor?: string;
+          hidden?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_template':
+      if (!('templateId' in args) || typeof args.templateId !== 'string') {
+        throw new Error('Missing required parameter: templateId');
+      }
+      return handleDeleteTemplate(args as { templateId: string; sceneId?: string }, foundryClient);
 
     // Combat tools
     case 'get_combat_state':
@@ -204,6 +642,10 @@ export async function routeToolRequest(
       );
     case 'start_combat':
       return handleStartCombat(args as { tokenIds?: string[]; sceneId?: string }, foundryClient);
+
+    // Token tools (read) — pure reads over cached worldData, no write gate.
+    case 'list_tokens':
+      return handleListTokens(args as { sceneId?: string }, foundryClient);
 
     // Token mutation tools (FR-019, WRITE — require FOUNDRY_WRITE_ENABLED)
     case 'move_token':
@@ -231,10 +673,100 @@ export async function routeToolRequest(
         args as { tokenId: string; statusId: string; active?: boolean; sceneId?: string },
         foundryClient,
       );
+    case 'spawn_token':
+      if (!('actorId' in args) || typeof args.actorId !== 'string') {
+        throw new Error('Missing required parameter: actorId');
+      }
+      if (!('x' in args) || typeof args.x !== 'number') {
+        throw new Error('Missing required parameter: x');
+      }
+      if (!('y' in args) || typeof args.y !== 'number') {
+        throw new Error('Missing required parameter: y');
+      }
+      return handleSpawnToken(
+        args as {
+          actorId: string;
+          x: number;
+          y: number;
+          sceneId?: string;
+          name?: string;
+          hidden?: boolean;
+        },
+        foundryClient,
+      );
+    case 'delete_token':
+      if (!('tokenId' in args) || typeof args.tokenId !== 'string') {
+        throw new Error('Missing required parameter: tokenId');
+      }
+      return handleDeleteToken(args as { tokenId: string; sceneId?: string }, foundryClient);
+    case 'move_token_pathfind':
+      if (!('tokenId' in args) || typeof args.tokenId !== 'string') {
+        throw new Error('Missing required parameter: tokenId');
+      }
+      if (!('x' in args) || typeof args.x !== 'number') {
+        throw new Error('Missing required parameter: x');
+      }
+      if (!('y' in args) || typeof args.y !== 'number') {
+        throw new Error('Missing required parameter: y');
+      }
+      return handleMoveTokenPathfind(
+        args as { tokenId: string; x: number; y: number; sceneId?: string; openDoors?: boolean },
+        foundryClient,
+      );
+    case 'move_tokens':
+      if (!('moves' in args) || !Array.isArray(args.moves)) {
+        throw new Error('Missing required parameter: moves');
+      }
+      return handleMoveTokens(
+        args as {
+          moves: Array<{
+            tokenId: string;
+            x: number;
+            y: number;
+            sceneId?: string;
+            pathfind?: boolean;
+            openDoors?: boolean;
+          }>;
+        },
+        foundryClient,
+      );
+    case 'update_token_vision':
+      if (!('tokenId' in args) || typeof args.tokenId !== 'string') {
+        throw new Error('Missing required parameter: tokenId');
+      }
+      return handleUpdateTokenVision(
+        args as {
+          tokenId: string;
+          sceneId?: string;
+          sightEnabled?: boolean;
+          sightRange?: number;
+          sightAngle?: number;
+          visionMode?: string;
+          lightDim?: number;
+          lightBright?: number;
+          lightColor?: string;
+          lightAngle?: number;
+          lightAnimationType?: string;
+        },
+        foundryClient,
+      );
 
     // Chat tools
     case 'get_chat_messages':
       return handleGetChatMessages(args as { limit?: number }, foundryClient);
+    case 'send_chat_message':
+      if (!('content' in args) || typeof args.content !== 'string') {
+        throw new Error('Missing required parameter: content');
+      }
+      return handleSendChatMessage(
+        args as {
+          content: string;
+          speaker?: string;
+          whisperTo?: string[];
+          style?: 'ooc' | 'ic' | 'emote';
+        },
+        foundryClient,
+      );
 
     // User tools
     case 'get_users':
@@ -270,6 +802,45 @@ export async function routeToolRequest(
         },
         foundryClient,
       );
+    case 'delete_journal_entry':
+      if (!('journalId' in args) || typeof args.journalId !== 'string') {
+        throw new Error('Missing required parameter: journalId');
+      }
+      return handleDeleteJournalEntry(args as { journalId: string }, foundryClient);
+
+    // Module-bridge tools (canvas-only; require the companion Foundry module)
+    case 'capture_scene':
+      return handleCaptureScene(args, moduleBridge);
+    case 'get_document_schema':
+      if (!('documentType' in args) || typeof args.documentType !== 'string') {
+        throw new Error('Missing required parameter: documentType');
+      }
+      if (!('type' in args) || typeof args.type !== 'string') {
+        throw new Error('Missing required parameter: type');
+      }
+      return handleGetDocumentSchema(
+        args as { documentType: 'Actor' | 'Item'; type: string },
+        moduleBridge,
+      );
+    case 'search_compendium_content':
+      return handleSearchCompendiumContent(
+        args as { query?: string; packType?: string; limit?: number },
+        moduleBridge,
+      );
+    case 'roll_and_post':
+      if (!('formula' in args) || typeof args.formula !== 'string') {
+        throw new Error('Missing required parameter: formula');
+      }
+      return handleRollAndPost(
+        args as {
+          formula: string;
+          flavor?: string;
+          speakerAlias?: string;
+          whisperTo?: string[];
+          rollMode?: string;
+        },
+        moduleBridge,
+      );
 
     // World tools
     case 'search_world':
@@ -281,6 +852,144 @@ export async function routeToolRequest(
       return handleGetWorldSummary(args, foundryClient);
     case 'refresh_world_data':
       return handleRefreshWorldData(args, foundryClient);
+
+    // Roll table tools
+    case 'list_roll_tables':
+      return handleListRollTables(args, foundryClient);
+    case 'roll_table':
+      if (!('tableId' in args) || typeof args.tableId !== 'string') {
+        throw new Error('Missing required parameter: tableId');
+      }
+      return handleRollTable(args as { tableId: string }, foundryClient);
+    case 'create_roll_table':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('results' in args) || !Array.isArray(args.results)) {
+        throw new Error('Missing required parameter: results');
+      }
+      return handleCreateRollTable(
+        args as {
+          name: string;
+          results: Array<{ text: string; weight?: number; range?: [number, number] }>;
+          description?: string;
+          formula?: string;
+          replacement?: boolean;
+          displayRoll?: boolean;
+          folder?: string;
+        },
+        foundryClient,
+      );
+    case 'delete_roll_table':
+      if (!('tableId' in args) || typeof args.tableId !== 'string') {
+        throw new Error('Missing required parameter: tableId');
+      }
+      return handleDeleteRollTable(args as { tableId: string }, foundryClient);
+
+    // World document tools (folders, macros, playlists)
+    case 'list_folders':
+      return handleListFolders(args as { type?: string }, foundryClient);
+    case 'create_folder':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('type' in args) || typeof args.type !== 'string') {
+        throw new Error('Missing required parameter: type');
+      }
+      return handleCreateFolder(
+        args as {
+          name: string;
+          type: string;
+          parent?: string;
+          color?: string;
+          sorting?: 'a' | 'm';
+        },
+        foundryClient,
+      );
+    case 'list_macros':
+      return handleListMacros(args, foundryClient);
+    case 'create_macro':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      if (!('type' in args) || typeof args.type !== 'string') {
+        throw new Error('Missing required parameter: type');
+      }
+      if (!('command' in args) || typeof args.command !== 'string') {
+        throw new Error('Missing required parameter: command');
+      }
+      return handleCreateMacro(
+        args as {
+          name: string;
+          type: 'script' | 'chat';
+          command: string;
+          img?: string;
+          folder?: string;
+          scope?: 'global' | 'actors' | 'actor';
+        },
+        foundryClient,
+      );
+    case 'delete_macro':
+      if (!('macroId' in args) || typeof args.macroId !== 'string') {
+        throw new Error('Missing required parameter: macroId');
+      }
+      return handleDeleteMacro(args as { macroId: string }, foundryClient);
+    case 'list_playlists':
+      return handleListPlaylists(args, foundryClient);
+    case 'create_playlist':
+      if (!('name' in args) || typeof args.name !== 'string') {
+        throw new Error('Missing required parameter: name');
+      }
+      return handleCreatePlaylist(
+        args as {
+          name: string;
+          description?: string;
+          mode?: -1 | 0 | 1 | 2;
+          channel?: 'music' | 'environment' | 'interface';
+          fade?: number;
+          folder?: string;
+          sounds?: Array<{ name: string; path: string; volume?: number; repeat?: boolean }>;
+        },
+        foundryClient,
+      );
+    case 'set_playlist_state':
+      if (!('playlistId' in args) || typeof args.playlistId !== 'string') {
+        throw new Error('Missing required parameter: playlistId');
+      }
+      if (!('playing' in args) || typeof args.playing !== 'boolean') {
+        throw new Error('Missing required parameter: playing');
+      }
+      return handleSetPlaylistState(
+        args as {
+          playlistId: string;
+          playing: boolean;
+          soundId?: string;
+        },
+        foundryClient,
+      );
+    case 'delete_playlist':
+      if (!('playlistId' in args) || typeof args.playlistId !== 'string') {
+        throw new Error('Missing required parameter: playlistId');
+      }
+      return handleDeletePlaylist(args as { playlistId: string }, foundryClient);
+
+    // Settings tools
+    case 'get_world_setting':
+      if (!('key' in args) || typeof args.key !== 'string') {
+        throw new Error('Missing required parameter: key');
+      }
+      return handleGetWorldSetting(args as { key: string }, foundryClient);
+    case 'set_world_setting':
+      if (!('key' in args) || typeof args.key !== 'string') {
+        throw new Error('Missing required parameter: key');
+      }
+      if (!('value' in args)) {
+        throw new Error('Missing required parameter: value');
+      }
+      return handleSetWorldSetting(
+        args as { key: string; value: unknown },
+        foundryClient,
+      );
 
     // Generation tools
     case 'generate_npc':
@@ -297,7 +1006,7 @@ export async function routeToolRequest(
       if (!('query' in args) || typeof args.query !== 'string') {
         throw new Error('Missing required parameter: query');
       }
-      return handleLookupRule(args as { query: string; system?: string }, foundryClient);
+      return handleLookupRule(args as { query: string }, foundryClient, moduleBridge);
 
     // Diagnostics tools (require REST API module)
     case 'get_recent_logs':
@@ -313,7 +1022,10 @@ export async function routeToolRequest(
     case 'get_system_health':
       return handleGetSystemHealth(args, diagnosticsClient);
     case 'diagnose_errors':
-      return handleDiagnoseErrors(args as { category?: string }, diagnosticSystem);
+      return handleDiagnoseErrors(
+        args as { category?: string; timeframe?: number },
+        diagnosticsClient,
+      );
     case 'get_health_status':
       return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
 

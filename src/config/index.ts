@@ -65,6 +65,30 @@ const ConfigSchema = z.object({
     ttlSeconds: z.number().default(300), // 5 minutes
     maxSize: z.number().default(1000),
   }),
+
+  /**
+   * WebSocket relay for the companion Foundry module (canvas-only tools:
+   * scene screenshots, etc.). Disabled by default — most tools need only
+   * the Socket.IO document API, not a browser-side module.
+   */
+  moduleBridge: z.object({
+    enabled: z.boolean().default(false),
+    port: z.number().default(31415),
+  }),
+
+  /**
+   * Local filesystem access to FoundryVTT's `Data` directory — the same
+   * directory the running Foundry server serves scene backgrounds and tile
+   * textures from (`assets/...` paths in Scene/Tile documents resolve
+   * relative to it). Optional: unset unless the MCP server runs on the same
+   * host as FoundryVTT. Enables `list_scene_assets` (browsing available map
+   * and prop art) and lets `create_scene`/`create_tile` read an image's
+   * real pixel dimensions from disk instead of requiring the caller to
+   * supply them by hand.
+   */
+  assets: z.object({
+    dataPath: z.string().optional(),
+  }),
 });
 
 /**
@@ -125,6 +149,20 @@ function loadConfig(): Config {
         ? parseInt(process.env.CACHE_TTL_SECONDS, 10)
         : undefined,
       maxSize: process.env.CACHE_MAX_SIZE ? parseInt(process.env.CACHE_MAX_SIZE, 10) : undefined,
+    },
+
+    moduleBridge: {
+      enabled:
+        process.env.FOUNDRY_MODULE_BRIDGE_ENABLED !== undefined
+          ? process.env.FOUNDRY_MODULE_BRIDGE_ENABLED === 'true'
+          : undefined,
+      port: process.env.FOUNDRY_MODULE_BRIDGE_PORT
+        ? parseInt(process.env.FOUNDRY_MODULE_BRIDGE_PORT, 10)
+        : undefined,
+    },
+
+    assets: {
+      dataPath: process.env.FOUNDRY_DATA_PATH,
     },
   };
 

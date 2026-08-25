@@ -153,7 +153,15 @@ describe('applyDocumentBroadcast — top-level documents', () => {
 
   it('ignores document types the cache does not model', () => {
     const world = buildWorldData();
-    expect(applyDocumentBroadcast(world, broadcast({ type: 'Setting' }))).toBe(false);
+    expect(applyDocumentBroadcast(world, broadcast({ type: 'Adventure' }))).toBe(false);
+  });
+
+  it('applies Setting document broadcasts to worldData.settings', () => {
+    const world = buildWorldData();
+    const settingDoc = { _id: 'settingAAAAAAAA', key: 'core.rollMode', value: '"publicroll"' };
+    expect(applyDocumentBroadcast(world, broadcast({ type: 'Setting', action: 'create', result: [settingDoc] }))).toBe(true);
+    expect(world.settings).toHaveLength(1);
+    expect(world.settings[0]).toMatchObject(settingDoc);
   });
 });
 

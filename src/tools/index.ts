@@ -14,8 +14,11 @@ export * from './handlers/generation.js';
 export * from './handlers/items.js';
 export * from './handlers/journals.js';
 export * from './handlers/resources.js';
+export * from './handlers/scene-mutations.js';
 export * from './handlers/scenes.js';
+export * from './handlers/tile-mutations.js';
 export * from './handlers/users.js';
+export * from './handlers/wall-mutations.js';
 export * from './handlers/world.js';
 export { getAllResources } from './resources.js';
 // Export routing functions

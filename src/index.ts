@@ -32,6 +32,7 @@ import {
 import { config } from './config/index.js';
 import { DiagnosticsClient } from './diagnostics/client.js';
 import { FoundryClient, type FoundryClientConfig } from './foundry/client.js';
+import { ModuleBridge } from './foundry/module-bridge.js';
 import {
   getAllResources,
   getAllTools,
@@ -50,6 +51,7 @@ class FoundryMCPServer {
   private foundryClient: FoundryClient;
   private diagnosticsClient: DiagnosticsClient;
   private diagnosticSystem: DiagnosticSystem;
+  private moduleBridge: ModuleBridge | null;
 
   /**
    * Creates a new FoundryMCPServer instance.
@@ -90,7 +92,17 @@ class FoundryMCPServer {
     if (config.foundry.userId) {
       clientConfig.userId = config.foundry.userId;
     }
+    if (config.assets.dataPath) {
+      clientConfig.dataPath = config.assets.dataPath;
+    }
     this.foundryClient = new FoundryClient(clientConfig);
+
+    // Canvas-only tools (scene screenshots, etc.) relay through a companion
+    // Foundry module over a plain WebSocket; disabled unless opted in, since
+    // most tools need only the Socket.IO document API set up above.
+    this.moduleBridge = config.moduleBridge.enabled
+      ? new ModuleBridge(config.moduleBridge.port)
+      : null;
 
     // Initialize DiagnosticsClient
     this.diagnosticsClient = new DiagnosticsClient(this.foundryClient);
@@ -134,6 +146,7 @@ class FoundryMCPServer {
           this.foundryClient,
           this.diagnosticsClient,
           this.diagnosticSystem,
+          this.moduleBridge,
         )) as CallToolResult;
       } catch (error) {
         logger.error('Tool execution failed:', error);
@@ -176,17 +189,44 @@ class FoundryMCPServer {
    * @returns Promise that resolves when the server is running
    */
   async start(): Promise<void> {
+    // Attach the stdio transport FIRST, before any network call. MCP
+    // clients spawn this process and write `initialize` on stdin right
+    // away; every millisecond spent connecting to FoundryVTT (a Socket.IO
+    // round-trip, ~0.4-1s observed) before wiring the transport is a
+    // millisecond the client's own handshake timeout burns with nothing
+    // reading stdin yet — omp's logs showed exactly this: "Transport
+    // closed" ~1s after spawn, matching the old connect-then-transport
+    // ordering. `tools/list` needs no FoundryVTT connection (getAllTools()
+    // is static); tool calls that do need it fail with FoundryClient's own
+    // "not connected" errors until the connection below resolves, rather
+    // than the whole process going unresponsive.
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
+    logger.info('FoundryVTT MCP Server started successfully');
+
     try {
       // Connect to FoundryVTT
       await this.foundryClient.connect();
       logger.info('Connected to FoundryVTT successfully');
 
-      // Start the MCP server
-      const transport = new StdioServerTransport();
-      await this.server.connect(transport);
-      logger.info('FoundryVTT MCP Server started successfully');
+      // The module bridge is optional, best-effort infrastructure for a
+      // handful of canvas-only tools (capture_scene, etc.) — a failure here
+      // (e.g. the port is already taken by a still-shutting-down previous
+      // instance) must never take down the FoundryVTT Socket.IO connection
+      // and the 40+ tools that don't need a module at all.
+      if (this.moduleBridge) {
+        try {
+          await this.moduleBridge.start();
+        } catch (error) {
+          logger.error(
+            'Module bridge failed to start — canvas-only tools (capture_scene) will report unavailable; all other tools are unaffected:',
+            error,
+          );
+          this.moduleBridge = null;
+        }
+      }
     } catch (error) {
-      logger.error('Failed to start server:', error);
+      logger.error('Failed to connect to FoundryVTT:', error);
       throw error;
     }
   }
@@ -198,6 +238,9 @@ class FoundryMCPServer {
   async shutdown(): Promise<void> {
     try {
       await this.foundryClient.disconnect();
+      if (this.moduleBridge) {
+        await this.moduleBridge.stop();
+      }
       logger.info('FoundryVTT MCP Server shutdown completed');
     } catch (error) {
       logger.error('Error during shutdown:', error);

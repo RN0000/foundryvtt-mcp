@@ -224,6 +224,140 @@ describe('FoundryClient', () => {
   });
 
   /**
+   * `connect()` treats REST (`apiKey`) and Socket.IO (username/password) as
+   * additive, not exclusive — matching `.env.example`'s documented intent
+   * ("Optional: Diagnostics... to enable 5 server monitoring tools", a
+   * supplement to Socket.IO, not a replacement for it). Before this, an
+   * `apiKey` short-circuited `connect()` entirely: no socket, no `worldData`,
+   * every WRITE and every cache-backed read unusable, even with valid
+   * Socket.IO credentials also configured.
+   */
+  describe('additive mode (apiKey + Socket.IO credentials)', () => {
+    /** Mock socket that acks the 'world' handshake immediately. */
+    function buildAdditiveSocket() {
+      const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+      const socket = {
+        connected: true,
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          const existing = listeners.get(event) ?? [];
+          existing.push(handler);
+          listeners.set(event, existing);
+          return socket;
+        }),
+        once: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          const existing = listeners.get(event) ?? [];
+          existing.push(handler);
+          listeners.set(event, existing);
+          return socket;
+        }),
+        off: vi.fn(() => socket),
+        emit: vi.fn((event: string, ack?: (payload: unknown) => void) => {
+          if (event === 'world' && typeof ack === 'function') {
+            ack({
+              userId: 'test-user-id',
+              actors: [],
+              scenes: [],
+              items: [],
+              journal: [],
+              messages: [],
+              combats: [],
+              users: [],
+              activeUsers: [],
+              macros: [],
+              playlists: [],
+              tables: [],
+              folders: [],
+            });
+          }
+          return socket;
+        }),
+        disconnect: vi.fn(() => {
+          socket.connected = false;
+          return socket;
+        }),
+      };
+      const fire = (event: string, ...args: unknown[]) => {
+        for (const handler of [...(listeners.get(event) ?? [])]) {
+          handler(...args);
+        }
+      };
+      return { socket, listeners, fire };
+    }
+
+    /** Connects a client configured with both an apiKey and username/password. */
+    async function connectAdditive() {
+      const { io } = await import('socket.io-client');
+      const { authenticateFoundry } = await import('../auth.js');
+      vi.mocked(authenticateFoundry).mockResolvedValue({
+        session: 'test-session',
+        userId: 'test-user-id',
+      });
+      const harness = buildAdditiveSocket();
+      vi.mocked(io).mockReturnValue(harness.socket as never);
+
+      const additive = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        apiKey: 'test-api-key',
+        username: 'gm',
+        password: 'secret',
+        writeEnabled: true,
+      });
+
+      const connecting = additive.connect();
+      await vi.waitFor(() => expect(harness.listeners.get('session')?.length).toBe(1));
+      harness.fire('session', { userId: 'test-user-id' });
+      await connecting;
+
+      return { client: additive, ...harness };
+    }
+
+    it('connects both transports when both credential sets are configured', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ status: 200, data: {} });
+
+      const { client: additive } = await connectAdditive();
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/api/status');
+      expect(additive.isConnected()).toBe(true);
+      expect(additive.hasWorldData()).toBe(true);
+    });
+
+    it('a REST failure does not block Socket.IO when Socket.IO credentials are also present', async () => {
+      mockAxiosInstance.get.mockRejectedValue(new Error('REST API module not installed'));
+
+      const { client: additive } = await connectAdditive();
+
+      expect(additive.isConnected()).toBe(true);
+      expect(additive.hasWorldData()).toBe(true);
+    });
+
+    it('WRITE operations work once Socket.IO connects, even with an apiKey configured', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ status: 200, data: {} });
+      const { client: additive, socket } = await connectAdditive();
+
+      socket.emit.mockImplementationOnce(
+        (_event: string, _payload: unknown, ack?: (r: unknown) => void) => {
+          ack?.({ result: [{ _id: 'sceneAAAAAAAAAAA', darkness: 0.5 }] });
+          return socket;
+        },
+      );
+
+      await expect(
+        additive.setSceneLighting('sceneAAAAAAAAAAA', { darkness: 0.5 }),
+      ).resolves.toBeDefined();
+    });
+
+    it('a REST failure without Socket.IO credentials still throws (REST-only unaffected)', async () => {
+      mockAxiosInstance.get.mockRejectedValue(new Error('unreachable'));
+      const restOnly = new FoundryClient({
+        baseUrl: 'http://localhost:30000',
+        apiKey: 'test-api-key',
+      });
+
+      await expect(restOnly.connect()).rejects.toThrow('unreachable');
+    });
+  });
+
+  /**
    * CN-6: retry/backoff matrix (Issue #136).
    *
    * Verifies the documented exception list:
@@ -381,6 +515,36 @@ describe('FoundryClient', () => {
 
       const items = await client.searchItems({ query: 'test' });
       expect(items.items).toEqual([]);
+    });
+
+    it('supports cursor pagination across cached actors and items', async () => {
+      client = new FoundryClient({ baseUrl: 'http://localhost:30000' });
+      const actors = Array.from({ length: 25 }, (_, i) => ({
+        _id: `actor${String(i).padStart(11, '0')}`,
+        name: `Actor ${i + 1}`,
+        type: 'character',
+        system: {},
+      }));
+      (client as unknown as { worldData: { actors: unknown[]; items: unknown[] } }).worldData = {
+        actors,
+        items: [],
+      };
+
+      const page1 = await client.searchActors({ limit: 10 });
+      expect(page1.actors).toHaveLength(10);
+      expect(page1.total).toBe(25);
+      expect(page1.actors[0]?.name).toBe('Actor 1');
+      expect(page1.nextCursor).not.toBeNull();
+
+      const page2 = await client.searchActors({ limit: 10, cursor: page1.nextCursor! });
+      expect(page2.actors).toHaveLength(10);
+      expect(page2.actors[0]?.name).toBe('Actor 11');
+      expect(page2.nextCursor).not.toBeNull();
+
+      const page3 = await client.searchActors({ limit: 10, cursor: page2.nextCursor! });
+      expect(page3.actors).toHaveLength(5);
+      expect(page3.actors[0]?.name).toBe('Actor 21');
+      expect(page3.nextCursor).toBeNull();
     });
 
     it('should return default world info when no worldData', async () => {

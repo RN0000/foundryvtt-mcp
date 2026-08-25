@@ -49,14 +49,26 @@ const TOP_LEVEL_COLLECTIONS: Record<string, keyof WorldData> = {
   Playlist: 'playlists',
   RollTable: 'tables',
   Cards: 'cards',
+  Setting: 'settings',
 };
 
 /** Parent document name → embedded document name → the parent's array field. */
 const EMBEDDED_COLLECTIONS: Record<string, Record<string, string>> = {
   Actor: { Item: 'items', ActiveEffect: 'effects' },
-  Scene: { Token: 'tokens', AmbientLight: 'lights', Wall: 'walls', Drawing: 'drawings' },
+  Scene: {
+    Token: 'tokens',
+    AmbientLight: 'lights',
+    AmbientSound: 'sounds',
+    Wall: 'walls',
+    Drawing: 'drawings',
+    Note: 'notes',
+    Tile: 'tiles',
+    MeasuredTemplate: 'templates',
+  },
   Combat: { Combatant: 'combatants' },
   Item: { ActiveEffect: 'effects' },
+  Playlist: { PlaylistSound: 'sounds' },
+  RollTable: { TableResult: 'results' },
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -127,8 +139,35 @@ function sanitize(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Sets or merges a value at a dot-separated path in `target`, creating nested
+ * objects as needed.
+ */
+function setDotPath(target: Record<string, unknown>, path: string, value: unknown): void {
+  const parts = path.split('.');
+  let curr = target;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!part || FORBIDDEN_KEYS.has(part)) return;
+    if (!isRecord(curr[part])) {
+      curr[part] = {};
+    }
+    curr = curr[part] as Record<string, unknown>;
+  }
+  const last = parts[parts.length - 1];
+  if (!last || FORBIDDEN_KEYS.has(last)) return;
+  if (value === null) {
+    delete curr[last];
+  } else if (isRecord(value) && isRecord(curr[last])) {
+    mergePatch(curr[last] as Record<string, unknown>, value);
+  } else {
+    curr[last] = value;
+  }
+}
+
+/**
  * Recursively merges `patch` into `target`, matching FoundryVTT's own update
- * semantics: keys merge, `null` deletes, arrays replace wholesale.
+ * semantics: keys merge, `null` deletes, arrays replace wholesale, and
+ * dot-notation keys (e.g. `'config.dim'`) expand into nested structures.
  *
  * Prototype-polluting keys are dropped rather than merged (see
  * {@link FORBIDDEN_KEYS}).
@@ -136,6 +175,10 @@ function sanitize(doc: Record<string, unknown>): Record<string, unknown> {
 function mergePatch(target: Record<string, unknown>, patch: Record<string, unknown>): void {
   for (const [key, value] of Object.entries(patch)) {
     if (FORBIDDEN_KEYS.has(key)) {
+      continue;
+    }
+    if (key.includes('.')) {
+      setDotPath(target, key, value);
       continue;
     }
     if (value === null) {

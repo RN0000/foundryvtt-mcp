@@ -86,6 +86,9 @@ class Logger {
    * Used for detailed information that's only needed when debugging issues.
    * Only shown when LOG_LEVEL is set to 'debug'.
    *
+   * Note: In an MCP stdio server, all log output MUST be written to stderr
+   * (via console.error) so that stdout remains clean for JSON-RPC messages.
+   *
    * @param message - The debug message
    * @param meta - Optional metadata object
    * @example
@@ -95,7 +98,7 @@ class Logger {
    */
   debug(message: string, meta?: unknown): void {
     if (this.shouldLog('debug')) {
-      console.debug(this.formatMessage('debug', message, meta));
+      console.error(this.formatMessage('debug', message, meta));
     }
   }
 
@@ -104,6 +107,9 @@ class Logger {
    *
    * Used for general information about application flow and important events.
    * Shown when LOG_LEVEL is 'debug' or 'info'.
+   *
+   * Note: In an MCP stdio server, all log output MUST be written to stderr
+   * (via console.error) so that stdout remains clean for JSON-RPC messages.
    *
    * @param message - The info message
    * @param meta - Optional metadata object
@@ -114,7 +120,7 @@ class Logger {
    */
   info(message: string, meta?: unknown): void {
     if (this.shouldLog('info')) {
-      console.info(this.formatMessage('info', message, meta));
+      console.error(this.formatMessage('info', message, meta));
     }
   }
 

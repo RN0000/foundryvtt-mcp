@@ -1,272 +1,129 @@
 # FoundryVTT MCP Server Setup Guide
 
-This guide walks you through setting up the FoundryVTT MCP Server.
-
-## Quick Start
-
-1. **Install dependencies**:
-
-   ```bash
-   npm install
-   ```
-
-2. **Copy environment file**:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. **Configure your connection** (see below)
-
-4. **Start the server**:
-   ```bash
-   npm run dev
-   ```
-
-## Connection Setup
-
-The MCP server connects to FoundryVTT via Socket.IO using a standard user account. No custom modules are required for full game data access.
-
-### Prerequisites
-
-- FoundryVTT server running with an **active world** (not on the setup screen)
-- A FoundryVTT user account with appropriate permissions
-
-### Setup Types
-
-Before configuring, determine your FoundryVTT deployment:
-
-#### Local Development Setup
-- FoundryVTT running on your local machine
-- Typically uses `http://localhost:30000` or similar
-- No reverse proxy or SSL/TLS
-
-#### Reverse Proxy / Remote Setup
-- FoundryVTT behind a reverse proxy (nginx, Apache, Caddy, etc.)
-- Custom domains with SSL/TLS (e.g., `https://foundry.example.com`)
-- Cloud hosting or remote server deployments
-- May use custom ports or paths
-
-#### Network/IP Setup
-- FoundryVTT accessible via local network IP
-- Different port configurations
-- Direct IP access without domain names
-
-### Configuration
-
-Update your `.env` file based on your setup type:
-
-**Local Development:**
-```env
-FOUNDRY_URL=http://localhost:30000
-FOUNDRY_USERNAME=your_username
-FOUNDRY_PASSWORD=your_password
-```
-
-**Reverse Proxy / Remote:**
-```env
-FOUNDRY_URL=https://foundry.example.com
-FOUNDRY_USERNAME=your_username
-FOUNDRY_PASSWORD=your_password
-```
-
-**Network/IP:**
-```env
-FOUNDRY_URL=http://192.168.1.100:30000
-FOUNDRY_USERNAME=your_username
-FOUNDRY_PASSWORD=your_password
-```
-
-### Features Available
-
-All features work out of the box with username/password authentication:
-
-- Search actors, items, scenes, and journals
-- Get detailed actor/item information
-- Dice rolling (evaluated locally in this mode; FoundryVTT's own `Roll` engine — and
-  with it parenthesised formulas — is used only when `FOUNDRY_API_KEY` is set)
-- Combat state and initiative tracking
-- Chat message history
-- User list and online status
-- Full-text world search
-- World summary and scene information
-- NPC and loot generation
-- Rule lookups
-
-### Environment Variables
-
-| Variable           | Required | Description                                  | Default |
-| ------------------ | -------- | -------------------------------------------- | ------- |
-| `FOUNDRY_URL`      | Yes      | FoundryVTT server URL                        | -       |
-| `FOUNDRY_USERNAME` | Yes      | FoundryVTT username                          | -       |
-| `FOUNDRY_PASSWORD` | Yes      | FoundryVTT password                          | -       |
-| `FOUNDRY_USER_ID`  | No       | 16-char document `_id` (bypasses username resolution) | - |
-| `FOUNDRY_API_KEY`  | No       | REST API module key (enables diagnostics)    | -       |
-| `LOG_LEVEL`        | No       | Logging level                                | `info`  |
-
-### Optional: Diagnostics Tools
-
-Installing the **Foundry Local REST API** module and setting `FOUNDRY_API_KEY` enables 5 server monitoring tools:
-
-- `get_recent_logs` - Retrieve filtered FoundryVTT logs
-- `search_logs` - Search logs by pattern, listing the matching entries
-- `get_system_health` - Server health status with versions, user/module counts, memory and log error counts (no CPU or disk metrics)
-- `diagnose_errors` - **stub**: returns a fixed "no errors detected" summary
-- `get_health_status` - Comprehensive health diagnostics; note that in this mode the
-  connection line reports the last REST request's outcome, not a live probe
-
-To enable:
-1. Install the REST API module in FoundryVTT
-2. Enable it in your world and copy the generated API key
-3. Add `FOUNDRY_API_KEY=your_key` to your `.env` file
-
-## Testing Your Setup
-
-### 1. Test Connection
-
-```bash
-npm run dev
-```
-
-Look for these success messages:
-
-```
-Connected to FoundryVTT successfully
-FoundryVTT MCP Server running
-```
-
-### 2. Test with AI Assistant
-
-Once the server is running, test these commands with your AI assistant:
-
-**Dice Rolling**:
-
-- "Roll 1d20+5 for an attack roll"
-- "Roll 4d6 drop lowest for ability scores"
-
-**Data Queries**:
-
-- "Search for goblin actors"
-- "Find all magic weapons"
-- "What's the current scene information?"
-- "Who's online?"
-
-**Content Generation**:
-
-- "Generate a random NPC"
-- "Create some loot for a level 5 party"
-
-## Troubleshooting
-
-### Common Issues
-
-#### "Failed to connect to FoundryVTT"
-
-- **Check**: FoundryVTT is running at the configured URL with an active world
-- **Check**: No firewall blocking the connection
-- **Try**: Test URL in browser (local: `http://localhost:30000`, remote: `https://foundry.example.com`)
-- **For reverse proxy**: Ensure WebSocket upgrades are properly configured
-
-#### "Authentication failed"
-
-- **Check**: Username matches a FoundryVTT user exactly (case-sensitive)
-- **Check**: Password is correct
-- **Check**: User has necessary permissions in FoundryVTT
-- **Try**: Set `FOUNDRY_USER_ID` to the 16-character document `_id` to bypass username resolution
-
-#### "World data not received"
-
-- **Check**: A world is active in FoundryVTT (not on the setup screen)
-- **Check**: Socket.IO authentication completed (check server logs)
-- **Try**: Restart both FoundryVTT and the MCP server
-
-#### "Empty search results"
-
-- **Check**: Data exists in your FoundryVTT world
-- **Check**: User has permission to view the data
-- **Check**: World data loaded on connect (look for worldData log on startup)
-
-#### "WebSocket connection issues"
-
-- **Check**: FoundryVTT allows WebSocket connections
-- **Check**: No proxy server blocking WebSocket upgrades
-- **Try**: Different port or direct connection
-
-#### "Reverse Proxy / SSL Issues"
-
-**SSL Certificate Problems:**
-- **Check**: SSL certificate is valid and not expired
-- **Check**: Certificate includes your domain name
-- **Try**: Test with curl: `curl -I https://foundry.example.com`
-
-**Proxy Configuration:**
-- **Nginx**: Ensure `proxy_set_header Upgrade $http_upgrade;` and `proxy_set_header Connection "upgrade";`
-- **Apache**: Enable `mod_proxy_wstunnel` for WebSocket support
-- **Caddy**: WebSocket support is automatic with `reverse_proxy`
-
-**Port and Path Issues:**
-- **Check**: Reverse proxy forwards to correct FoundryVTT port (usually 30000)
-- **Check**: No path conflicts (e.g., `/socket.io/` path is preserved)
-- **Try**: Direct connection to bypass proxy temporarily
-
-### Getting Help
-
-1. **Check logs**: Run with `LOG_LEVEL=debug` for detailed information
-2. **Test manually**: Try accessing FoundryVTT directly in your browser
-3. **Network issues**: Verify firewall and network configuration
-
-## Advanced Configuration
-
-### Direct User ID
-
-If username resolution fails, set the user ID directly. Find the 16-character document `_id` for your user in FoundryVTT's data:
-
-```env
-FOUNDRY_USER_ID=abc123def456ghij
-```
-
-### Custom Socket Path
-
-If FoundryVTT uses a custom socket path:
-
-```env
-FOUNDRY_SOCKET_PATH=/custom/socket/path/
-```
-
-### Timeout Settings
-
-For slow connections, increase timeouts:
-
-```env
-FOUNDRY_TIMEOUT=30000
-FOUNDRY_RETRY_ATTEMPTS=5
-FOUNDRY_RETRY_DELAY=2000
-```
-
-### Production Deployment
-
-For production use:
-
-```env
-NODE_ENV=production
-LOG_LEVEL=warn
-```
-
-## What's Next?
-
-Once you have a working connection:
-
-1. **Explore all available tools**: Check the README for a complete list
-2. **Customize for your game**: Many tools can be configured for specific game systems
-3. **Add more features**: The server is extensible - add your own tools and resources
-4. **Contribute**: Found bugs or want new features? Contributions welcome!
-
-## Supported FoundryVTT Versions
-
-- **FoundryVTT v11+**: Fully supported
-- **FoundryVTT v10**: Basic support
-- **Earlier versions**: Not tested, may work with limitations
+This guide walks you through setting up and configuring the FoundryVTT Model Context Protocol (MCP) Server for use with your AI assistant.
 
 ---
 
-**Need more help?** Check the main README or open an issue on GitHub.
+## ⚡ Quick Start
+
+### 1. Prerequisites
+- **Node.js 18+** or **Bun** installed.
+- **FoundryVTT v11+ / v12+** running with an **active world** (not on the world selection/setup screen).
+- An MCP client (Claude Desktop, Claude Code, Oh My Pi, VS Code, Cursor).
+
+### 2. Set Up a Dedicated Foundry User
+In FoundryVTT:
+1. Open **Configuration** (gear icon) → **User Management**.
+2. Click **Create User**.
+3. Set **User Name** (e.g. `mcp-api`) and a password (e.g. `mcp`).
+4. Set Role to **Gamemaster** or **Assistant GM** (ensure write permissions are granted).
+5. Save changes.
+
+### 3. Install Companion Module (FoundryVTT MCP Bridge)
+Copy the `foundry-module` folder from this repository into your FoundryVTT `Data/modules/` directory:
+
+```bash
+# Windows
+cp -r foundry-module "%LOCALAPPDATA%/FoundryVTT/Data/modules/foundryvtt-mcp-bridge"
+
+# macOS
+cp -r foundry-module "~/Library/Application Support/FoundryVTT/Data/modules/foundryvtt-mcp-bridge"
+
+# Linux
+cp -r foundry-module "~/.local/share/FoundryVTT/Data/modules/foundryvtt-mcp-bridge"
+```
+
+In FoundryVTT, go to **Manage Modules** and check **FoundryVTT MCP Bridge**.
+
+---
+
+## ⚙️ Environment Variables
+
+Copy `.env.example` to `.env` in the server root and configure:
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `FOUNDRY_URL` | **Yes** | `http://localhost:30000` | FoundryVTT server URL |
+| `FOUNDRY_USERNAME` | **Yes** | — | Dedicated user account name |
+| `FOUNDRY_PASSWORD` | **Yes** | — | Dedicated user password |
+| `FOUNDRY_WRITE_ENABLED` | No | `true` | Enables game-state mutations (walls, lights, tokens, items) |
+| `FOUNDRY_MODULE_BRIDGE_ENABLED` | No | `true` | Enables WebSocket bridge for canvas screenshots & chat rolls |
+| `FOUNDRY_MODULE_BRIDGE_PORT` | No | `31415` | WebSocket port for the companion bridge |
+| `FOUNDRY_DATA_PATH` | No | — | Local filesystem path to Foundry `Data/` directory |
+| `FOUNDRY_API_KEY` | No | — | Optional REST API module key for server diagnostics |
+| `LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
+
+---
+
+## 🔌 MCP Client Configurations
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+```json
+{
+  "mcpServers": {
+    "foundryvtt": {
+      "command": "node",
+      "args": ["<ABSOLUTE_PATH_TO_REPO>/dist/index.js"],
+      "env": {
+        "FOUNDRY_URL": "http://localhost:30000",
+        "FOUNDRY_USERNAME": "mcp-api",
+        "FOUNDRY_PASSWORD": "mcp",
+        "FOUNDRY_WRITE_ENABLED": "true",
+        "FOUNDRY_MODULE_BRIDGE_ENABLED": "true",
+        "FOUNDRY_MODULE_BRIDGE_PORT": "31415"
+      }
+    }
+  }
+}
+```
+
+### Oh My Pi (`~/.omp/agent/mcp.json`)
+
+```json
+{
+  "mcpServers": {
+    "foundryvtt": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["<ABSOLUTE_PATH_TO_REPO>/dist/index.js"],
+      "env": {
+        "FOUNDRY_URL": "http://localhost:30000",
+        "FOUNDRY_USERNAME": "mcp-api",
+        "FOUNDRY_PASSWORD": "mcp",
+        "FOUNDRY_WRITE_ENABLED": "true",
+        "FOUNDRY_MODULE_BRIDGE_ENABLED": "true",
+        "FOUNDRY_MODULE_BRIDGE_PORT": "31415"
+      },
+      "timeout": 60000
+    }
+  }
+}
+```
+
+---
+
+## 🧪 Verifying the Installation
+
+1. **Build and test locally:**
+   ```bash
+   npm install
+   npm run build
+   npm test
+   ```
+2. **Start the server:**
+   ```bash
+   npm start
+   ```
+3. Check the startup logs:
+   - `Connected to FoundryVTT via Socket.IO`
+   - `Module bridge listening on ws://localhost:31415`
+   - `Foundry module connected to bridge` (when Foundry is open in a browser)
+
+---
+
+## 🛠️ Troubleshooting
+
+- **Socket.IO Authentication Failed**: Double-check that the Foundry world is active, the username is exact (case-sensitive), and the password matches.
+- **Companion Bridge Not Connecting**: Ensure the module is enabled in Foundry's module manager, and that `FOUNDRY_MODULE_BRIDGE_PORT` matches the port configured in the module's settings (default: 31415).
+- **Write Operations Rejected**: Verify `FOUNDRY_WRITE_ENABLED=true` is set and the Foundry user has Gamemaster or Assistant GM role.
