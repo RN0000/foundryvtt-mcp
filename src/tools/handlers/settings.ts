@@ -6,10 +6,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import { withToolError } from './utils.js';
 
-export async function handleGetWorldSetting(
-  args: { key: string },
-  foundryClient: FoundryClient,
-) {
+export async function handleGetWorldSetting(args: { key: string }, foundryClient: FoundryClient) {
   const { key } = args;
   if (!key || typeof key !== 'string') {
     throw new McpError(ErrorCode.InvalidParams, 'key is required and must be a string');

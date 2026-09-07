@@ -23,7 +23,13 @@ export async function handleSearchItems(
   const { query, type, rarity, limit = 10, cursor } = args;
 
   return withToolError('search items', async () => {
-    const searchParams: { query: string; type?: string; rarity?: string; limit: number; cursor?: string } = {
+    const searchParams: {
+      query: string;
+      type?: string;
+      rarity?: string;
+      limit: number;
+      cursor?: string;
+    } = {
       query: query || '',
       limit,
     };

@@ -349,7 +349,10 @@ describe('Token mutation handlers', () => {
 
       const result = await handleUpdateTokenVision({ tokenId: TOKEN_ID, sightRange: 30 }, client);
       expect(result.content[0].text).toContain('Token Vision/Light Updated');
-      expect(client.updateTokenVision).toHaveBeenCalledWith(SCENE_ID, TOKEN_ID, { tokenId: TOKEN_ID, sightRange: 30 });
+      expect(client.updateTokenVision).toHaveBeenCalledWith(SCENE_ID, TOKEN_ID, {
+        tokenId: TOKEN_ID,
+        sightRange: 30,
+      });
     });
 
     it('throws McpError when token is missing', async () => {
@@ -357,7 +360,9 @@ describe('Token mutation handlers', () => {
         findToken: vi.fn(() => null),
       } as unknown as FoundryClient;
 
-      await expect(handleUpdateTokenVision({ tokenId: TOKEN_ID }, client)).rejects.toThrow(McpError);
+      await expect(handleUpdateTokenVision({ tokenId: TOKEN_ID }, client)).rejects.toThrow(
+        McpError,
+      );
     });
   });
 });

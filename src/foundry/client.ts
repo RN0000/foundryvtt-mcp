@@ -1883,16 +1883,33 @@ export class FoundryClient {
     if (patch.sightRange !== undefined && patch.sightRange > 0 && sightEnabled === undefined) {
       sightEnabled = true;
     }
-    if (sightEnabled !== undefined) update['sight.enabled'] = sightEnabled;
-    if (patch.sightRange !== undefined) update['sight.range'] = patch.sightRange;
-    if (patch.sightAngle !== undefined) update['sight.angle'] = patch.sightAngle;
-    if (patch.visionMode !== undefined) update['sight.visionMode'] = patch.visionMode;
-    if (patch.lightDim !== undefined) update['light.dim'] = patch.lightDim;
-    if (patch.lightBright !== undefined) update['light.bright'] = patch.lightBright;
-    if (patch.lightColor !== undefined) update['light.color'] = patch.lightColor;
-    if (patch.lightAngle !== undefined) update['light.angle'] = patch.lightAngle;
-    if (patch.lightAnimationType !== undefined)
+    if (sightEnabled !== undefined) {
+      update['sight.enabled'] = sightEnabled;
+    }
+    if (patch.sightRange !== undefined) {
+      update['sight.range'] = patch.sightRange;
+    }
+    if (patch.sightAngle !== undefined) {
+      update['sight.angle'] = patch.sightAngle;
+    }
+    if (patch.visionMode !== undefined) {
+      update['sight.visionMode'] = patch.visionMode;
+    }
+    if (patch.lightDim !== undefined) {
+      update['light.dim'] = patch.lightDim;
+    }
+    if (patch.lightBright !== undefined) {
+      update['light.bright'] = patch.lightBright;
+    }
+    if (patch.lightColor !== undefined) {
+      update['light.color'] = patch.lightColor;
+    }
+    if (patch.lightAngle !== undefined) {
+      update['light.angle'] = patch.lightAngle;
+    }
+    if (patch.lightAnimationType !== undefined) {
       update['light.animation.type'] = patch.lightAnimationType;
+    }
 
     const result = await this.modifyDocument('Token', 'update', {
       updates: [update],
@@ -2722,8 +2739,12 @@ export class FoundryClient {
       replacement: options.replacement ?? true,
       displayRoll: options.displayRoll ?? true,
     };
-    if (options.description) tableData.description = options.description;
-    if (options.folder) tableData.folder = options.folder;
+    if (options.description) {
+      tableData.description = options.description;
+    }
+    if (options.folder) {
+      tableData.folder = options.folder;
+    }
 
     const created = await this.modifyDocument('RollTable', 'create', { data: [tableData] });
     const tableId = (created[0] as { _id?: string })?._id;
@@ -2805,8 +2826,12 @@ export class FoundryClient {
       type,
       sorting: options.sorting ?? 'a',
     };
-    if (options.parent) data.folder = options.parent;
-    if (options.color) data.color = options.color;
+    if (options.parent) {
+      data.folder = options.parent;
+    }
+    if (options.color) {
+      data.color = options.color;
+    }
 
     const result = await this.modifyDocument('Folder', 'create', { data: [data] });
     return result[0];
@@ -2859,8 +2884,12 @@ export class FoundryClient {
       author: this.worldData?.userId,
       scope: options.scope ?? 'global',
     };
-    if (options.img) data.img = options.img;
-    if (options.folder) data.folder = options.folder;
+    if (options.img) {
+      data.img = options.img;
+    }
+    if (options.folder) {
+      data.folder = options.folder;
+    }
 
     const result = await this.modifyDocument('Macro', 'create', { data: [data] });
     return result[0];
@@ -2932,9 +2961,15 @@ export class FoundryClient {
       mode: options.mode ?? 0,
       channel: options.channel ?? 'music',
     };
-    if (options.description) data.description = options.description;
-    if (options.fade !== undefined) data.fade = options.fade;
-    if (options.folder) data.folder = options.folder;
+    if (options.description) {
+      data.description = options.description;
+    }
+    if (options.fade !== undefined) {
+      data.fade = options.fade;
+    }
+    if (options.folder) {
+      data.folder = options.folder;
+    }
 
     const created = await this.modifyDocument('Playlist', 'create', { data: [data] });
     const playlistId = (created[0] as { _id?: string })?._id;
@@ -2976,9 +3011,10 @@ export class FoundryClient {
         throw new Error(`Invalid soundId format: ${options.soundId}`);
       }
       const playlist = this.worldData?.playlists.find((p) => p._id === playlistId);
-      const soundExists =
-        Array.isArray(playlist?.sounds) &&
-        (playlist?.sounds as Array<Record<string, unknown>>).some((s) => s._id === options.soundId);
+      const sounds = Array.isArray(playlist?.sounds)
+        ? (playlist.sounds as Array<Record<string, unknown>>)
+        : [];
+      const soundExists = sounds.some((s) => s._id === options.soundId);
       if (!soundExists) {
         throw new Error(`Sound not found on playlist: ${options.soundId}`);
       }
@@ -3073,7 +3109,7 @@ export class FoundryClient {
 
     const serializedValue = JSON.stringify(value);
 
-    if (existing && existing._id) {
+    if (existing?._id) {
       await this.modifyDocument('Setting', 'update', {
         updates: [{ _id: existing._id, value: serializedValue }],
         diff: true,
@@ -4149,16 +4185,36 @@ export class FoundryClient {
     }
 
     const update: Record<string, unknown> = { _id: lightId };
-    if (patch.x !== undefined) update.x = patch.x;
-    if (patch.y !== undefined) update.y = patch.y;
-    if (patch.rotation !== undefined) update.rotation = patch.rotation;
-    if (patch.walls !== undefined) update.walls = patch.walls;
-    if (patch.vision !== undefined) update.vision = patch.vision;
-    if (patch.hidden !== undefined) update.hidden = patch.hidden;
-    if (patch.dim !== undefined) update['config.dim'] = patch.dim;
-    if (patch.bright !== undefined) update['config.bright'] = patch.bright;
-    if (patch.color !== undefined) update['config.color'] = patch.color;
-    if (patch.angle !== undefined) update['config.angle'] = patch.angle;
+    if (patch.x !== undefined) {
+      update.x = patch.x;
+    }
+    if (patch.y !== undefined) {
+      update.y = patch.y;
+    }
+    if (patch.rotation !== undefined) {
+      update.rotation = patch.rotation;
+    }
+    if (patch.walls !== undefined) {
+      update.walls = patch.walls;
+    }
+    if (patch.vision !== undefined) {
+      update.vision = patch.vision;
+    }
+    if (patch.hidden !== undefined) {
+      update.hidden = patch.hidden;
+    }
+    if (patch.dim !== undefined) {
+      update['config.dim'] = patch.dim;
+    }
+    if (patch.bright !== undefined) {
+      update['config.bright'] = patch.bright;
+    }
+    if (patch.color !== undefined) {
+      update['config.color'] = patch.color;
+    }
+    if (patch.angle !== undefined) {
+      update['config.angle'] = patch.angle;
+    }
 
     const result = await this.modifyDocument('AmbientLight', 'update', {
       updates: [update],
@@ -4387,9 +4443,15 @@ export class FoundryClient {
       textAnchor: options.textAnchor ?? 1,
       global: options.global ?? false,
     };
-    if (options.entryId) data.entryId = options.entryId;
-    if (options.pageId) data.pageId = options.pageId;
-    if (options.text !== undefined) data.text = options.text;
+    if (options.entryId) {
+      data.entryId = options.entryId;
+    }
+    if (options.pageId) {
+      data.pageId = options.pageId;
+    }
+    if (options.text !== undefined) {
+      data.text = options.text;
+    }
 
     const result = await this.modifyDocument('Note', 'create', {
       data: [data],
@@ -4543,10 +4605,18 @@ export class FoundryClient {
       hidden: options.hidden ?? false,
       locked: options.locked ?? false,
     };
-    if (options.fillColor) data.fillColor = options.fillColor;
-    if (options.fillAlpha !== undefined) data.fillAlpha = options.fillAlpha;
-    if (options.strokeColor) data.strokeColor = options.strokeColor;
-    if (options.text !== undefined) data.text = options.text;
+    if (options.fillColor) {
+      data.fillColor = options.fillColor;
+    }
+    if (options.fillAlpha !== undefined) {
+      data.fillAlpha = options.fillAlpha;
+    }
+    if (options.strokeColor) {
+      data.strokeColor = options.strokeColor;
+    }
+    if (options.text !== undefined) {
+      data.text = options.text;
+    }
 
     const result = await this.modifyDocument('Drawing', 'create', {
       data: [data],
@@ -4688,8 +4758,12 @@ export class FoundryClient {
       author: this.worldData?.userId,
       hidden: options.hidden ?? false,
     };
-    if (options.borderColor) data.borderColor = options.borderColor;
-    if (options.fillColor) data.fillColor = options.fillColor;
+    if (options.borderColor) {
+      data.borderColor = options.borderColor;
+    }
+    if (options.fillColor) {
+      data.fillColor = options.fillColor;
+    }
 
     const result = await this.modifyDocument('MeasuredTemplate', 'create', {
       data: [data],
@@ -4823,10 +4897,18 @@ export class FoundryClient {
       name: options.name,
       shapes: mappedShapes,
     };
-    if (options.color) regionData.color = options.color;
-    if (options.visibility !== undefined) regionData.visibility = options.visibility;
-    if (options.elevation) regionData.elevation = options.elevation;
-    if (options.behaviors) regionData.behaviors = options.behaviors;
+    if (options.color) {
+      regionData.color = options.color;
+    }
+    if (options.visibility !== undefined) {
+      regionData.visibility = options.visibility;
+    }
+    if (options.elevation) {
+      regionData.elevation = options.elevation;
+    }
+    if (options.behaviors) {
+      regionData.behaviors = options.behaviors;
+    }
 
     const result = await this.modifyDocument('Region', 'create', {
       data: [regionData],

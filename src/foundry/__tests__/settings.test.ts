@@ -167,12 +167,16 @@ describe('FoundryClient world settings', () => {
 
   it('refuses writes to the core.* namespace', async () => {
     const { client } = await connectClient();
-    await expect(client.setWorldSetting('core.something', 1)).rejects.toThrow(/Refusing to write a core\.\* setting/);
+    await expect(client.setWorldSetting('core.something', 1)).rejects.toThrow(
+      /Refusing to write a core\.\* setting/,
+    );
   });
 
   it('rejects malformed setting key without scope', async () => {
     const { client } = await connectClient();
-    await expect(client.setWorldSetting('invalidkey', 1)).rejects.toThrow(/must have format {scope}\.{field}/);
+    await expect(client.setWorldSetting('invalidkey', 1)).rejects.toThrow(
+      /must have format {scope}\.{field}/,
+    );
   });
 
   it('emits serialized JSON string when creating/updating settings', async () => {

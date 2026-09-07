@@ -157,7 +157,9 @@ describe('FoundryClient world documents', () => {
       await client.createRollTable('Loot Table', results);
 
       const modifyCalls = socket.emit.mock.calls.filter(([event]) => event === 'modifyDocument');
-      const tableCreate = modifyCalls[0]?.[1] as { operation: { data: Array<Record<string, unknown>> } };
+      const tableCreate = modifyCalls[0]?.[1] as {
+        operation: { data: Array<Record<string, unknown>> };
+      };
       expect(tableCreate.operation.data[0]).toMatchObject({
         name: 'Loot Table',
         formula: '1d3',
@@ -195,9 +197,13 @@ describe('FoundryClient world documents', () => {
   describe('Folder', () => {
     it('creates and lists folders with type validation', async () => {
       const { client } = await connectClient();
-      await expect(client.createFolder('Bad Folder', 'InvalidType')).rejects.toThrow(/Invalid folder type/);
+      await expect(client.createFolder('Bad Folder', 'InvalidType')).rejects.toThrow(
+        /Invalid folder type/,
+      );
 
-      const folder = (await client.createFolder('NPCs', 'Actor', { color: '#ff0000' })) as { _id: string };
+      const folder = (await client.createFolder('NPCs', 'Actor', { color: '#ff0000' })) as {
+        _id: string;
+      };
       expect(client.listFolders()).toHaveLength(1);
       expect(client.listFolders({ type: 'Actor' })[0]).toMatchObject({
         id: folder._id,
@@ -212,7 +218,11 @@ describe('FoundryClient world documents', () => {
   describe('Macro', () => {
     it('creates and lists macros with author attached and command preview', async () => {
       const { client, socket } = await connectClient();
-      const macro = (await client.createMacro('Say Hi', 'chat', '/ooc Hello World!\nSecond Line')) as {
+      const macro = (await client.createMacro(
+        'Say Hi',
+        'chat',
+        '/ooc Hello World!\nSecond Line',
+      )) as {
         _id: string;
       };
 
@@ -236,7 +246,7 @@ describe('FoundryClient world documents', () => {
 
   describe('Playlist', () => {
     it('creates playlist with tracks and updates state', async () => {
-      const { client, socket } = await connectClient();
+      const { client } = await connectClient();
       const playlist = (await client.createPlaylist('Combat BGM', {
         mode: 1, // shuffle
         sounds: [

@@ -299,7 +299,7 @@ function generateLootForCR(cr: number, _type: string) {
   };
 }
 
-function lookupGameRule(query: string, system: string) {
+function _lookupGameRule(query: string, system: string) {
   // Mock rule lookup - in a real implementation, this would query actual rule databases
   return {
     title: `${query} Rule`,

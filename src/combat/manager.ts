@@ -150,7 +150,7 @@ export class CombatManager extends EventEmitter {
   }
 
   async nextTurn(): Promise<CombatantState | null> {
-    if (!this.currentCombat || !this.currentCombat.active) {
+    if (!this.currentCombat?.active) {
       throw new Error('No active combat');
     }
 

@@ -9,7 +9,6 @@ import type { DiagnosticsClient } from '../../diagnostics/client.js';
 import type { LogEntry } from '../../diagnostics/types.js';
 import { LogEntrySchema } from '../../diagnostics/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
-import type { DiagnosticSystem } from '../../utils/diagnostics.js';
 import { withToolError } from './utils.js';
 
 /** Valid log levels recognized by the tool schema */
@@ -322,7 +321,9 @@ export async function handleDiagnoseErrors(
     const recentErrors = (diagnosis.recentErrors ?? []).slice(-10);
     const errorLines =
       recentErrors.length > 0
-        ? recentErrors.map((e) => `- \`[${e.timestamp}]\` [${e.level.toUpperCase()}] ${e.message}`).join('\n')
+        ? recentErrors
+            .map((e) => `- \`[${e.timestamp}]\` [${e.level.toUpperCase()}] ${e.message}`)
+            .join('\n')
         : 'No recent error logs.';
 
     return {

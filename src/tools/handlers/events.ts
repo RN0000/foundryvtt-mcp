@@ -2,8 +2,8 @@
  * World-event tool handler (`watch_events`).
  */
 
-import type { FoundryClient } from '../../foundry/client.js';
 import { config } from '../../config/index.js';
+import type { FoundryClient } from '../../foundry/client.js';
 import { withToolError } from './utils.js';
 
 /** Clamps `waitMs` into the range the tool description promises. */

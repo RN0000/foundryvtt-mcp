@@ -9,7 +9,9 @@
  * @returns Clean plain text with all HTML tags stripped
  */
 export function stripHtml(input: string): string {
-  if (!input) return '';
+  if (!input) {
+    return '';
+  }
   let prev = '';
   let curr = input;
   while (curr !== prev) {
