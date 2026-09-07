@@ -49,7 +49,9 @@ export async function handleGetSceneInfo(
  * Throws an McpError if no scene is active and no sceneId is provided.
  */
 export function resolveSceneId(sceneId: string | undefined, foundryClient: FoundryClient): string {
-  if (sceneId) return sceneId;
+  if (sceneId) {
+    return sceneId;
+  }
   const active = foundryClient.getScenes().find((s) => s.active);
   if (!active) {
     throw new McpError(

@@ -332,7 +332,11 @@ describe('updateTokenVision', () => {
   it('rejects empty patch or invalid color', async () => {
     const { client } = await connectClient();
     const created = (await client.spawnToken(SCENE_ID, ACTOR_ID, 50, 50)) as { _id: string };
-    await expect(client.updateTokenVision(SCENE_ID, created._id, {})).rejects.toThrow(/patch is required/);
-    await expect(client.updateTokenVision(SCENE_ID, created._id, { lightColor: 'invalid' })).rejects.toThrow(/Invalid lightColor format/);
+    await expect(client.updateTokenVision(SCENE_ID, created._id, {})).rejects.toThrow(
+      /patch is required/,
+    );
+    await expect(
+      client.updateTokenVision(SCENE_ID, created._id, { lightColor: 'invalid' }),
+    ).rejects.toThrow(/Invalid lightColor format/);
   });
 });

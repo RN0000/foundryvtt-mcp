@@ -202,12 +202,16 @@ describe('FoundryClient placeables', () => {
 
     it('rejects invalid color format', async () => {
       const { client } = await connectClient();
-      await expect(client.createLight(SCENE_ID, { x: 0, y: 0, color: 'blue' })).rejects.toThrow(/Invalid color format/);
+      await expect(client.createLight(SCENE_ID, { x: 0, y: 0, color: 'blue' })).rejects.toThrow(
+        /Invalid color format/,
+      );
     });
 
     it('updates and deletes a light', async () => {
       const { client } = await connectClient();
-      const light = (await client.createLight(SCENE_ID, { x: 100, y: 100, dim: 5 })) as { _id: string };
+      const light = (await client.createLight(SCENE_ID, { x: 100, y: 100, dim: 5 })) as {
+        _id: string;
+      };
       await client.updateLight(SCENE_ID, light._id, { dim: 10 });
       expect(client.listLights(SCENE_ID)[0]?.dim).toBe(10);
       await client.deleteLight(SCENE_ID, light._id);
@@ -243,12 +247,16 @@ describe('FoundryClient placeables', () => {
   describe('Note', () => {
     it('requires entryId or text', async () => {
       const { client } = await connectClient();
-      await expect(client.createNote(SCENE_ID, { x: 0, y: 0 })).rejects.toThrow(/needs entryId.*or text/);
+      await expect(client.createNote(SCENE_ID, { x: 0, y: 0 })).rejects.toThrow(
+        /needs entryId.*or text/,
+      );
     });
 
     it('validates journal entry exists if entryId given', async () => {
       const { client } = await connectClient();
-      await expect(client.createNote(SCENE_ID, { x: 0, y: 0, entryId: 'missingJournalAA' })).rejects.toThrow(/Journal entry not found/);
+      await expect(
+        client.createNote(SCENE_ID, { x: 0, y: 0, entryId: 'missingJournalAA' }),
+      ).rejects.toThrow(/Journal entry not found/);
     });
 
     it('creates note with text or valid entryId', async () => {
@@ -277,9 +285,15 @@ describe('FoundryClient placeables', () => {
   describe('Drawing', () => {
     it('validates shape requirements', async () => {
       const { client } = await connectClient();
-      await expect(client.createDrawing(SCENE_ID, { shape: 'r', x: 0, y: 0 })).rejects.toThrow(/width and height are required/);
-      await expect(client.createDrawing(SCENE_ID, { shape: 'c', x: 0, y: 0 })).rejects.toThrow(/radius.*required/);
-      await expect(client.createDrawing(SCENE_ID, { shape: 'p', x: 0, y: 0, points: [0, 0, 10] })).rejects.toThrow(/at least 6 coordinates/);
+      await expect(client.createDrawing(SCENE_ID, { shape: 'r', x: 0, y: 0 })).rejects.toThrow(
+        /width and height are required/,
+      );
+      await expect(client.createDrawing(SCENE_ID, { shape: 'c', x: 0, y: 0 })).rejects.toThrow(
+        /radius.*required/,
+      );
+      await expect(
+        client.createDrawing(SCENE_ID, { shape: 'p', x: 0, y: 0, points: [0, 0, 10] }),
+      ).rejects.toThrow(/at least 6 coordinates/);
     });
 
     it('creates and lists drawings with author attached', async () => {
@@ -309,9 +323,15 @@ describe('FoundryClient placeables', () => {
   describe('MeasuredTemplate', () => {
     it('validates template per-type requirements', async () => {
       const { client } = await connectClient();
-      await expect(client.createTemplate(SCENE_ID, { t: 'cone', distance: 10, x: 0, y: 0 })).rejects.toThrow(/direction, and angle are required/);
-      await expect(client.createTemplate(SCENE_ID, { t: 'ray', distance: 10, direction: 45, x: 0, y: 0 })).rejects.toThrow(/direction, and width are required/);
-      await expect(client.createTemplate(SCENE_ID, { t: 'rect', distance: 10, x: 0, y: 0 })).rejects.toThrow(/direction are required/);
+      await expect(
+        client.createTemplate(SCENE_ID, { t: 'cone', distance: 10, x: 0, y: 0 }),
+      ).rejects.toThrow(/direction, and angle are required/);
+      await expect(
+        client.createTemplate(SCENE_ID, { t: 'ray', distance: 10, direction: 45, x: 0, y: 0 }),
+      ).rejects.toThrow(/direction, and width are required/);
+      await expect(
+        client.createTemplate(SCENE_ID, { t: 'rect', distance: 10, x: 0, y: 0 }),
+      ).rejects.toThrow(/direction are required/);
     });
 
     it('creates circle and cone templates with author attached', async () => {

@@ -1105,8 +1105,7 @@ export const placeableMutationTools = [
   },
   {
     name: 'delete_light',
-    description:
-      'Permanently remove an AmbientLight from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Permanently remove an AmbientLight from a scene. ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1166,8 +1165,7 @@ export const placeableMutationTools = [
   },
   {
     name: 'delete_sound',
-    description:
-      'Permanently remove an AmbientSound from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Permanently remove an AmbientSound from a scene. ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1312,7 +1310,7 @@ export const placeableMutationTools = [
   },
   {
     name: 'delete_drawing',
-    description: 'Permanently remove a Drawing from a scene. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Permanently remove a Drawing from a scene. ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2292,8 +2290,7 @@ export const worldDocumentMutationTools = [
   },
   {
     name: 'delete_macro',
-    description:
-      'Permanently delete a Macro document from the world. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Permanently delete a Macro document from the world. ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2304,8 +2301,7 @@ export const worldDocumentMutationTools = [
   },
   {
     name: 'create_playlist',
-    description:
-      'Create a new audio Playlist document with optional starting sound tracks. ' + WRITE_GATE,
+    description: `Create a new audio Playlist document with optional starting sound tracks. ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2510,8 +2506,7 @@ export const rollTableTools = [
   },
   {
     name: 'delete_roll_table',
-    description:
-      'Permanently delete a RollTable document from the world. ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Permanently delete a RollTable document from the world. ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -3063,8 +3058,7 @@ export const regionTools = [
   },
   {
     name: 'delete_region',
-    description:
-      'Delete a Scene Region from a scene (FoundryVTT v12+). ' + CONFIRM_FIRST + ' ' + WRITE_GATE,
+    description: `Delete a Scene Region from a scene (FoundryVTT v12+). ${CONFIRM_FIRST} ${WRITE_GATE}`,
     inputSchema: {
       type: 'object',
       properties: {
