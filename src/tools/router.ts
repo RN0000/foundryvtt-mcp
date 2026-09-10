@@ -5,6 +5,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { DiagnosticsClient } from '../diagnostics/client.js';
 import type { AttributePatch, FoundryClient, WallType } from '../foundry/client.js';
+import type { HeadlessGmSession } from '../foundry/headless-gm-session.js';
 import type { ModuleBridge } from '../foundry/module-bridge.js';
 import type {
   ActorEffectChangeInput,
@@ -168,6 +169,7 @@ export async function routeToolRequest(
   diagnosticsClient: DiagnosticsClient,
   diagnosticSystem: DiagnosticSystem,
   moduleBridge: ModuleBridge | null = null,
+  headlessGmSession: HeadlessGmSession | null = null,
 ): Promise<ToolResult> {
   logger.debug(`Routing tool request: ${name}`, { args });
 
@@ -1169,7 +1171,13 @@ export async function routeToolRequest(
         diagnosticsClient,
       );
     case 'get_health_status':
-      return handleGetHealthStatus(args, foundryClient, diagnosticsClient);
+      return handleGetHealthStatus(
+        args,
+        foundryClient,
+        diagnosticsClient,
+        moduleBridge,
+        headlessGmSession,
+      );
 
     // ActiveEffect tools (general-purpose; apply_status_effect above stays
     // the simpler idempotent status toggle)

@@ -8,6 +8,8 @@ import type { DiagnosticsClient } from '../../../diagnostics/client.js';
 import type { LogEntry, SystemHealth } from '../../../diagnostics/types.js';
 import { SystemHealthSchema } from '../../../diagnostics/types.js';
 import type { FoundryClient } from '../../../foundry/client.js';
+import type { HeadlessGmSession } from '../../../foundry/headless-gm-session.js';
+import type { ModuleBridge } from '../../../foundry/module-bridge.js';
 import {
   handleDiagnoseErrors,
   handleGetHealthStatus,
@@ -426,6 +428,57 @@ describe('handleGetHealthStatus', () => {
     expect(text).not.toMatch(/stale/i);
     expect(text).not.toContain('refresh_world_data');
   });
+
+  it('omits the Module Bridge section entirely when no bridge is configured', async () => {
+    const text = getText(
+      await handleGetHealthStatus({}, worldClient(true), healthClient(makeHealth())),
+    );
+
+    expect(text).not.toContain('Module Bridge');
+  });
+
+  it('reports the bridge connected when a module is dialed in', async () => {
+    const bridge = { isConnected: () => true } as unknown as ModuleBridge;
+
+    const text = getText(
+      await handleGetHealthStatus({}, worldClient(true), healthClient(makeHealth()), bridge),
+    );
+
+    expect(text).toContain('**Module Bridge:**');
+    expect(text).toContain('✅ Connected');
+  });
+
+  it('surfaces the headless GM session status when the bridge has no module connected', async () => {
+    const bridge = { isConnected: () => false } as unknown as ModuleBridge;
+    const headlessSession = {
+      statusText: () => '⏳ Not connected yet — no user named "mcp-api" in the join list',
+    } as unknown as HeadlessGmSession;
+
+    const text = getText(
+      await handleGetHealthStatus(
+        {},
+        worldClient(true),
+        healthClient(makeHealth()),
+        bridge,
+        headlessSession,
+      ),
+    );
+
+    expect(text).toContain('❌ Not connected');
+    expect(text).toContain('**Headless GM session:**');
+    expect(text).toContain('no user named "mcp-api"');
+  });
+
+  it('points at manual setup when the bridge has no headless session configured', async () => {
+    const bridge = { isConnected: () => false } as unknown as ModuleBridge;
+
+    const text = getText(
+      await handleGetHealthStatus({}, worldClient(true), healthClient(makeHealth()), bridge),
+    );
+
+    expect(text).toContain('❌ Not connected');
+    expect(text).toContain('FOUNDRY_HEADLESS_GM_ENABLED');
+  });
 });
 
 describe('handleDiagnoseErrors', () => {
@@ -440,7 +493,12 @@ describe('handleDiagnoseErrors', () => {
           categories: { socket: 3, database: 2 },
         },
         recentErrors: [
-          { timestamp: '2024-06-01T11:55:00.000Z', level: 'error', message: 'Socket drop', source: 'foundry' },
+          {
+            timestamp: '2024-06-01T11:55:00.000Z',
+            level: 'error',
+            message: 'Socket drop',
+            source: 'foundry',
+          },
         ],
         suggestions: [
           { category: 'socket', suggestion: 'Check network cable', priority: 'critical' },

@@ -75,6 +75,7 @@
     "ajv": "^8.20.0",
     "axios": "^1.18.0",
     "dotenv": "^17.4.2",
+    "playwright-core": "^1.63.0",
     "socket.io-client": "^4.8.3",
     "ws": "^8.21.0",
     "zod": "^4.4.3"

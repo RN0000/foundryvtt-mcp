@@ -146,6 +146,51 @@ describe('Config', () => {
     });
   });
 
+  describe('headlessGm', () => {
+    it('defaults to enabled with no explicit credentials', async () => {
+      process.env = { FOUNDRY_URL: 'http://localhost:30000' };
+
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+
+      expect(config.headlessGm.enabled).toBe(true);
+      expect(config.headlessGm.username).toBeUndefined();
+      expect(config.headlessGm.password).toBeUndefined();
+      expect(config.headlessGm.executablePath).toBeUndefined();
+    });
+
+    it('reads explicit overrides distinct from foundry.username/password', async () => {
+      process.env = {
+        FOUNDRY_URL: 'http://localhost:30000',
+        FOUNDRY_USERNAME: 'mcp-api',
+        FOUNDRY_PASSWORD: 'mcp',
+        FOUNDRY_HEADLESS_GM_USERNAME: 'gm-bridge',
+        FOUNDRY_HEADLESS_GM_PASSWORD: 'bridge-pass',
+        FOUNDRY_HEADLESS_GM_EXECUTABLE_PATH: '/opt/chrome/chrome',
+      };
+
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+
+      expect(config.headlessGm.username).toBe('gm-bridge');
+      expect(config.headlessGm.password).toBe('bridge-pass');
+      expect(config.headlessGm.executablePath).toBe('/opt/chrome/chrome');
+      expect(config.foundry.username).toBe('mcp-api');
+    });
+
+    it('can be disabled explicitly', async () => {
+      process.env = {
+        FOUNDRY_URL: 'http://localhost:30000',
+        FOUNDRY_HEADLESS_GM_ENABLED: 'false',
+      };
+
+      const { config, resetConfig } = await import('../index.js');
+      resetConfig();
+
+      expect(config.headlessGm.enabled).toBe(false);
+    });
+  });
+
   describe('type conversion', () => {
     it('should convert string numbers to numbers', async () => {
       process.env = {

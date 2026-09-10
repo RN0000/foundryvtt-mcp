@@ -32,6 +32,7 @@ import {
 import { config } from './config/index.js';
 import { DiagnosticsClient } from './diagnostics/client.js';
 import { FoundryClient, type FoundryClientConfig } from './foundry/client.js';
+import { HeadlessGmSession } from './foundry/headless-gm-session.js';
 import { ModuleBridge } from './foundry/module-bridge.js';
 import {
   getAllResources,
@@ -52,6 +53,7 @@ class FoundryMCPServer {
   private diagnosticsClient: DiagnosticsClient;
   private diagnosticSystem: DiagnosticSystem;
   private moduleBridge: ModuleBridge | null;
+  private headlessGmSession: HeadlessGmSession | null;
 
   /**
    * Creates a new FoundryMCPServer instance.
@@ -111,6 +113,31 @@ class FoundryMCPServer {
         this.foundryClient.recordModuleEvent(type, payload);
     }
 
+    // Invisible GM-tier browser session that hosts the companion module —
+    // no human has to manually open and log into a second Foundry tab.
+    // Only worth building when there's a bridge for it to connect to, and
+    // only possible with username/password credentials (an apiKey-only
+    // setup has nothing to log a browser in with).
+    const headlessUsername = config.headlessGm.username ?? config.foundry.username;
+    const headlessPassword = config.headlessGm.password ?? config.foundry.password;
+    if (this.moduleBridge && config.headlessGm.enabled && headlessUsername && headlessPassword) {
+      this.headlessGmSession = new HeadlessGmSession({
+        foundryUrl: config.foundry.url,
+        username: headlessUsername,
+        password: headlessPassword,
+        ...(config.headlessGm.executablePath
+          ? { executablePath: config.headlessGm.executablePath }
+          : {}),
+      });
+    } else {
+      this.headlessGmSession = null;
+      if (this.moduleBridge && config.headlessGm.enabled) {
+        logger.warn(
+          'Headless GM session disabled — no username/password to log a browser in with (set FOUNDRY_USERNAME/FOUNDRY_PASSWORD or FOUNDRY_HEADLESS_GM_USERNAME/FOUNDRY_HEADLESS_GM_PASSWORD, or open a GM browser tab manually).',
+        );
+      }
+    }
+
     // Initialize DiagnosticsClient
     this.diagnosticsClient = new DiagnosticsClient(this.foundryClient);
 
@@ -154,6 +181,7 @@ class FoundryMCPServer {
           this.diagnosticsClient,
           this.diagnosticSystem,
           this.moduleBridge,
+          this.headlessGmSession,
         )) as CallToolResult;
       } catch (error) {
         logger.error('Tool execution failed:', error);
@@ -230,6 +258,25 @@ class FoundryMCPServer {
             error,
           );
           this.moduleBridge = null;
+          this.headlessGmSession = null;
+        }
+      }
+
+      // Same best-effort isolation as the module bridge itself: a browser
+      // that fails to launch (no Chrome/Edge installed) must never take
+      // down the Socket.IO connection or the module bridge's WS server —
+      // canvas-only tools just report unavailable until this resolves.
+      // Login happens in the background after this resolves (Foundry may
+      // still be booting); see HeadlessGmSession.start().
+      if (this.headlessGmSession) {
+        try {
+          await this.headlessGmSession.start();
+        } catch (error) {
+          logger.error(
+            'Headless GM session failed to launch — open a GM/Assistant-GM browser tab manually for canvas-only tools to work:',
+            error,
+          );
+          this.headlessGmSession = null;
         }
       }
     } catch (error) {
@@ -245,6 +292,9 @@ class FoundryMCPServer {
   async shutdown(): Promise<void> {
     try {
       await this.foundryClient.disconnect();
+      if (this.headlessGmSession) {
+        await this.headlessGmSession.stop();
+      }
       if (this.moduleBridge) {
         await this.moduleBridge.stop();
       }

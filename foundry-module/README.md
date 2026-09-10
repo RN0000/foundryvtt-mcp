@@ -11,6 +11,9 @@ While the MCP server handles game-state reads and document mutations over Socket
 - 📤 **Native FilePicker Asset Uploads (`upload-asset`)**: uploads images, maps, and audio directly via Foundry's internal `FilePicker.upload()` API.
 - 📦 **Compendium Deep Search & Document Extraction (`search-compendium-content`, `get-compendium-document`)**: searches pack indices with regex text matching and extracts raw compendium documents for world imports.
 - 📑 **DataModel Schema Introspection (`get-schema`)**: dynamically introspects `CONFIG.Actor.dataModels` and `CONFIG.Item.dataModels` for exact system field schemas and choices.
+
+This module only activates its bridge connection for a **GM or Assistant-GM** user (`game.user.isGM`) — Foundry itself restricts canvas fog-of-war, `game.togglePause()`, and `FilePicker.upload()` to that permission tier. **You do not need to manually keep a GM browser tab open for this**: the MCP server automatically drives its own invisible background browser session logged in as your GM/Assistant-GM account, so a human can play as a normal Player in their own visible Foundry client while this module stays connected through that background session. See the server's `FOUNDRY_HEADLESS_GM_ENABLED` setting to opt out and manage a GM tab manually instead.
+
 ---
 
 ## 📦 Installation in FoundryVTT
@@ -39,7 +42,6 @@ While the MCP server handles game-state reads and document mutations over Socket
 In FoundryVTT under **Configure Settings** → **Module Settings** → **FoundryVTT MCP Bridge**:
 
 - **Bridge Port** (default: `31415`): The WebSocket port on `localhost` where the MCP server bridge listens. Must match `FOUNDRY_MODULE_BRIDGE_PORT` in your MCP server configuration.
-- **Auto Connect** (default: `true`): Automatically connect to the MCP server bridge on game load.
 
 ---
 

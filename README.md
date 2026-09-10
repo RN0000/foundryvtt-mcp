@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue.svg)](https://www.typescriptlang.org/)
-[![Vitest](https://img.shields.io/badge/Tests-713%20passing-brightgreen.svg)](https://vitest.dev/)
+[![Vitest](https://img.shields.io/badge/Tests-728%20passing-brightgreen.svg)](https://vitest.dev/)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-111-purple.svg)](https://modelcontextprotocol.io/)
 
 A comprehensive, production-grade [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for **Foundry Virtual Tabletop (FoundryVTT)**.
@@ -59,24 +59,25 @@ The server employs a hybrid architecture to deliver real-time responsiveness and
                                │ MCP (stdio)
 ┌──────────────────────────────▼──────────────────────────────┐
 │                    FoundryVTT MCP Server                    │
-├──────────────────────────────┬──────────────────────────────┤
-│  In-Memory World Cache       │  A* Pathfinding Router       │
-│  (Live Socket.IO Sync)       │  Dice Notation Engine        │
-└──────────────┬───────────────┴──────────────┬───────────────┘
-               │ Socket.IO (Port 30000)       │ WebSocket (Port 31415)
-               │ (modifyDocument / Events)    │ (Bridge Protocol)
-┌──────────────▼──────────────────────────────▼───────────────┐
-│                    FoundryVTT Game Engine                   │
-│  ┌────────────────────────┐    ┌─────────────────────────┐  │
-│  │   Active World & Data  │    │  Companion Module       │  │
-│  │   (Actors, Scenes, …)  │    │  (foundryvtt-mcp-bridge)│  │
-│  └────────────────────────┘    └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+├──────────────────────────┬───────────────────┬──────────────┤
+│  In-Memory World Cache   │  A* Pathfinding   │  Headless GM  │
+│  (Live Socket.IO Sync)   │  Dice Notation    │  Browser Sess.│
+└──────────────┬───────────┴─────────┬─────────┴──────┬───────┘
+               │ Socket.IO (30000)   │ WS (31415)      │ auto-login
+               │ (modifyDocument)    │ (Bridge)        │ (Chrome/Edge)
+┌──────────────▼──────────────────────────────▼────────▼───────┐
+│                    FoundryVTT Game Engine                    │
+│  ┌────────────────────────┐    ┌─────────────────────────┐   │
+│  │   Active World & Data  │    │  Companion Module        │  │
+│  │   (Actors, Scenes, …)  │    │  (foundryvtt-mcp-bridge) │  │
+│  └────────────────────────┘    └─────────────────────────┘   │
+└────────────────────────────────────────────────────────────┘
 ```
 
 1. **Socket.IO Primary Connection**: Connects to FoundryVTT as an authenticated user (`mcp-api`). Automatically synchronizes and caches the world state, enabling instant lookups and high-frequency document mutations via the `modifyDocument` protocol.
-2. **Companion Module Bridge (`foundryvtt-mcp-bridge`)**: A lightweight Foundry module running in the browser that executes canvas-bound operations (PIXI canvas screenshot with grid overlay, native `Roll` chat card rendering, document schema introspection, and compendium item extraction).
-3. **Optional REST API Module**: Provides server diagnostics, log retrieval, and health reporting when the local REST module is installed.
+2. **Companion Module Bridge (`foundryvtt-mcp-bridge`)**: A lightweight Foundry module running in a browser that executes canvas-bound operations (PIXI canvas screenshot with grid overlay, native `Roll` chat card rendering, document schema introspection, and compendium item extraction). It only activates for a GM/Assistant-GM user — Foundry itself restricts pausing the game and uploading files to that tier, and a Player's canvas is fog-of-war-limited.
+3. **Automatic Headless GM Session**: The server drives its own invisible, background browser tab (via `playwright-core`, reusing whatever Chrome/Edge is already installed — no download required) that logs in as the same `mcp-api` account and hosts the module above. This means a human can play the game as a normal Player in their own visible client while the AI has full GM-tier canvas access through this separate, invisible session — no manual second browser tab required. Falls back gracefully (canvas-only tools report unavailable) if no browser is found; a manually-opened GM tab still works as before if preferred (set `FOUNDRY_HEADLESS_GM_ENABLED=false`).
+4. **Optional REST API Module**: Provides server diagnostics, log retrieval, and health reporting when the local REST module is installed.
 
 ---
 
@@ -87,6 +88,7 @@ The server employs a hybrid architecture to deliver real-time responsiveness and
 - **Node.js 18+** or **Bun**
 - **FoundryVTT v11+ / v12+** running an active world
 - A dedicated Foundry user account with **Gamemaster** or **Assistant GM** role
+- **Google Chrome or Microsoft Edge installed** (for the automatic headless GM browser session — see below; most desktops already have one)
 
 ### 2. Configure Dedicated Foundry User
 
@@ -95,6 +97,8 @@ In FoundryVTT:
 2. Click **Create User**
 3. Set Username: `mcp-api`, Password: `mcp` (or your choice)
 4. Role: **Gamemaster** (or **Assistant GM** with write permissions enabled)
+
+> **Playing as a human while the AI GMs?** No extra setup needed. Log into your own Foundry client as a normal **Player**; the server automatically logs `mcp-api` into its own invisible background browser session for GM-tier canvas access (screenshots, dice rolls, pausing, uploads). See [`FOUNDRY_HEADLESS_GM_ENABLED`](#environment-variables) below to disable this and use a manually-opened GM browser tab instead.
 
 ### 3. Install the Companion Module (Recommended)
 
@@ -127,11 +131,16 @@ In FoundryVTT, go to **Manage Modules** and enable **FoundryVTT MCP Bridge**.
 | `FOUNDRY_WRITE_ENABLED` | No | `true` | Enables game-state mutations (walls, actors, tokens, etc.) |
 | `FOUNDRY_MODULE_BRIDGE_ENABLED` | No | `true` | Enables WebSocket bridge for canvas screenshots & chat rolls |
 | `FOUNDRY_MODULE_BRIDGE_PORT` | No | `31415` | WebSocket port for the companion module bridge |
+| `FOUNDRY_HEADLESS_GM_ENABLED` | No | `true` | Auto-launches an invisible GM-tier browser session to host the module bridge — no manual second browser tab needed |
+| `FOUNDRY_HEADLESS_GM_USERNAME` | No | `FOUNDRY_USERNAME` | Overrides which account the headless session logs in as |
+| `FOUNDRY_HEADLESS_GM_PASSWORD` | No | `FOUNDRY_PASSWORD` | Password for the headless session account, if overridden |
+| `FOUNDRY_HEADLESS_GM_EXECUTABLE_PATH` | No | — | Explicit Chrome/Edge/Chromium binary path, skipping auto-detection |
 | `FOUNDRY_DATA_PATH` | No | — | Local path to Foundry `Data/` for asset dimension discovery |
 | `FOUNDRY_API_KEY` | No | — | Optional REST API key for server diagnostics tools |
-| `FOUNDRY_EVENTS_BUFFER_SIZE` | No | `500` | In-memory event log ring buffer capacity |
-| `FOUNDRY_EVENTS_DEFAULT_WAIT_MS` | No | `25000` | Default long-polling timeout for `watch_events` |
+| `FOUNDRY_EVENT_BUFFER_SIZE` | No | `500` | In-memory event log ring buffer capacity |
+| `FOUNDRY_EVENT_WAIT_MS` | No | `25000` | Default long-polling timeout for `watch_events` |
 | `LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
+
 ### Claude Desktop Configuration
 
 Add to `claude_desktop_config.json`:
@@ -273,7 +282,7 @@ npm install
 # Compile TypeScript
 npm run build
 
-# Run complete unit test suite (713 tests)
+# Run complete unit test suite (728 tests)
 npm test
 
 # Run linter and formatting checks

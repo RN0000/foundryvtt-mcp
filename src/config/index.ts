@@ -77,6 +77,22 @@ const ConfigSchema = z.object({
   }),
 
   /**
+   * Invisible, auto-logging-in GM/Assistant-GM browser session that hosts
+   * the module bridge without a human needing to manually open and log
+   * into a second Foundry browser tab. Only launched when `moduleBridge` is
+   * also enabled — it exists purely to give the companion module somewhere
+   * GM-tier to run. Defaults to `foundry.username`/`foundry.password`
+   * (the same account `FoundryClient`'s Socket.IO connection already uses)
+   * when not explicitly overridden.
+   */
+  headlessGm: z.object({
+    enabled: z.boolean().default(true),
+    username: z.string().optional(),
+    password: z.string().optional(),
+    executablePath: z.string().optional(),
+  }),
+
+  /**
    * Local filesystem access to FoundryVTT's `Data` directory — the same
    * directory the running Foundry server serves scene backgrounds and tile
    * textures from (`assets/...` paths in Scene/Tile documents resolve
@@ -169,6 +185,16 @@ function loadConfig(): Config {
       port: process.env.FOUNDRY_MODULE_BRIDGE_PORT
         ? parseInt(process.env.FOUNDRY_MODULE_BRIDGE_PORT, 10)
         : undefined,
+    },
+
+    headlessGm: {
+      enabled:
+        process.env.FOUNDRY_HEADLESS_GM_ENABLED !== undefined
+          ? process.env.FOUNDRY_HEADLESS_GM_ENABLED === 'true'
+          : undefined,
+      username: process.env.FOUNDRY_HEADLESS_GM_USERNAME,
+      password: process.env.FOUNDRY_HEADLESS_GM_PASSWORD,
+      executablePath: process.env.FOUNDRY_HEADLESS_GM_EXECUTABLE_PATH,
     },
 
     assets: {

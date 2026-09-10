@@ -9,6 +9,8 @@ import type { DiagnosticsClient } from '../../diagnostics/client.js';
 import type { LogEntry } from '../../diagnostics/types.js';
 import { LogEntrySchema } from '../../diagnostics/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
+import type { HeadlessGmSession } from '../../foundry/headless-gm-session.js';
+import type { ModuleBridge } from '../../foundry/module-bridge.js';
 import type { DiagnosticSystem } from '../../utils/diagnostics.js';
 import { withToolError } from './utils.js';
 
@@ -322,7 +324,9 @@ export async function handleDiagnoseErrors(
     const recentErrors = (diagnosis.recentErrors ?? []).slice(-10);
     const errorLines =
       recentErrors.length > 0
-        ? recentErrors.map((e) => `- \`[${e.timestamp}]\` [${e.level.toUpperCase()}] ${e.message}`).join('\n')
+        ? recentErrors
+            .map((e) => `- \`[${e.timestamp}]\` [${e.level.toUpperCase()}] ${e.message}`)
+            .join('\n')
         : 'No recent error logs.';
 
     return {
@@ -367,6 +371,8 @@ export async function handleGetHealthStatus(
   _args: Record<string, unknown>,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
+  moduleBridge: ModuleBridge | null = null,
+  headlessGmSession: HeadlessGmSession | null = null,
 ) {
   return withToolError('get health status', async () => {
     const [worldInfo, systemHealth] = await Promise.all([
@@ -405,6 +411,22 @@ export async function handleGetHealthStatus(
       healthSection = `\n${healthLines.join('\n')}`;
     }
 
+    // Only rendered when the bridge is configured at all — most setups run
+    // without it, and a permanent "not connected" line for a feature nobody
+    // opted into would just be noise.
+    let moduleBridgeSection: string | null = null;
+    if (moduleBridge) {
+      if (moduleBridge.isConnected()) {
+        moduleBridgeSection = '✅ Connected';
+      } else if (headlessGmSession) {
+        moduleBridgeSection = `❌ Not connected\n- **Headless GM session:** ${headlessGmSession.statusText()}`;
+      } else {
+        moduleBridgeSection =
+          '❌ Not connected — no GM/Assistant-GM browser tab is logged in. Open one manually, ' +
+          'or set FOUNDRY_HEADLESS_GM_ENABLED=true with FOUNDRY_USERNAME/FOUNDRY_PASSWORD to automate it.';
+      }
+    }
+
     return {
       content: [
         {
@@ -418,7 +440,7 @@ ${foundryClient.isConnected() ? '✅ Connected' : '❌ Disconnected'}
 ${worldLines.join('\n')}
 
 **System Health:**
-${healthSection}`,
+${healthSection}${moduleBridgeSection ? `\n\n**Module Bridge:**\n${moduleBridgeSection}` : ''}`,
         },
       ],
     };

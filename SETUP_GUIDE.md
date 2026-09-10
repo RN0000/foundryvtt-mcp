@@ -10,6 +10,7 @@ This guide walks you through setting up and configuring the FoundryVTT Model Con
 - **Node.js 18+** or **Bun** installed.
 - **FoundryVTT v11+ / v12+** running with an **active world** (not on the world selection/setup screen).
 - An MCP client (Claude Desktop, Claude Code, Oh My Pi, VS Code, Cursor).
+- **Google Chrome or Microsoft Edge installed**, for the automatic headless GM browser session (step 4) — most desktops already have one.
 
 ### 2. Set Up a Dedicated Foundry User
 In FoundryVTT:
@@ -35,6 +36,11 @@ cp -r foundry-module "~/.local/share/FoundryVTT/Data/modules/foundryvtt-mcp-brid
 
 In FoundryVTT, go to **Manage Modules** and check **FoundryVTT MCP Bridge**.
 
+### 4. Automatic Headless GM Session (no manual browser tab needed)
+With the module installed and `FOUNDRY_MODULE_BRIDGE_ENABLED=true` (default), the server automatically launches its own invisible background browser tab, logs into Foundry as `mcp-api` (the same account from step 2), and hosts the companion module there. This gives the AI full GM-tier canvas access (screenshots, dice rolls, pausing, file uploads) while a **human can log into their own visible Foundry client as a normal Player** — no fog-of-war spoilers, no extra setup.
+
+This step needs nothing from you beyond Chrome/Edge being installed. To opt out and manage a GM browser tab yourself instead, set `FOUNDRY_HEADLESS_GM_ENABLED=false`.
+
 ---
 
 ## ⚙️ Environment Variables
@@ -49,8 +55,14 @@ Copy `.env.example` to `.env` in the server root and configure:
 | `FOUNDRY_WRITE_ENABLED` | No | `true` | Enables game-state mutations (walls, lights, tokens, items) |
 | `FOUNDRY_MODULE_BRIDGE_ENABLED` | No | `true` | Enables WebSocket bridge for canvas screenshots & chat rolls |
 | `FOUNDRY_MODULE_BRIDGE_PORT` | No | `31415` | WebSocket port for the companion bridge |
+| `FOUNDRY_HEADLESS_GM_ENABLED` | No | `true` | Auto-launches an invisible GM-tier browser session to host the module bridge |
+| `FOUNDRY_HEADLESS_GM_USERNAME` | No | `FOUNDRY_USERNAME` | Overrides which account the headless session logs in as |
+| `FOUNDRY_HEADLESS_GM_PASSWORD` | No | `FOUNDRY_PASSWORD` | Password for the headless session account, if overridden |
+| `FOUNDRY_HEADLESS_GM_EXECUTABLE_PATH` | No | — | Explicit Chrome/Edge/Chromium binary path, skipping auto-detection |
 | `FOUNDRY_DATA_PATH` | No | — | Local filesystem path to Foundry `Data/` directory |
 | `FOUNDRY_API_KEY` | No | — | Optional REST API module key for server diagnostics |
+| `FOUNDRY_EVENT_BUFFER_SIZE` | No | `500` | In-memory event log ring buffer capacity |
+| `FOUNDRY_EVENT_WAIT_MS` | No | `25000` | Default long-polling timeout for `watch_events` |
 | `LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 
 ---
@@ -118,12 +130,15 @@ Copy `.env.example` to `.env` in the server root and configure:
 3. Check the startup logs:
    - `Connected to FoundryVTT via Socket.IO`
    - `Module bridge listening on ws://localhost:31415`
-   - `Foundry module connected to bridge` (when Foundry is open in a browser)
+   - `Headless GM session logged in as mcp-api` (the automatic background session picking up the bridge, no manual browser step needed)
 
 ---
 
 ## 🛠️ Troubleshooting
 
 - **Socket.IO Authentication Failed**: Double-check that the Foundry world is active, the username is exact (case-sensitive), and the password matches.
-- **Companion Bridge Not Connecting**: Ensure the module is enabled in Foundry's module manager, and that `FOUNDRY_MODULE_BRIDGE_PORT` matches the port configured in the module's settings (default: 31415).
+- **Companion Bridge Not Connecting**: Check `get_health_status` — it reports both bridge connectivity and the headless session's own status line. Ensure the module is enabled in Foundry's module manager, and that `FOUNDRY_MODULE_BRIDGE_PORT` matches the port configured in the module's settings (default: 31415).
+- **Headless GM session: "No usable browser found"**: Install Google Chrome or Microsoft Edge, or set `FOUNDRY_HEADLESS_GM_EXECUTABLE_PATH` to a browser binary.
+- **Headless GM session: "No user named ... is registered in this world's join list"**: The account named in `FOUNDRY_USERNAME`/`FOUNDRY_HEADLESS_GM_USERNAME` doesn't exist in this world, or the world is on the setup screen rather than active. Verify step 2 above and that Foundry shows the world as loaded.
+- **A human plays as Player but capture_scene/set_pause/upload_asset still report unavailable**: The companion module only connects for a GM/Assistant-GM `game.user.isGM` session — a Foundry-core restriction (canvas fog of war, `game.togglePause()`, `FilePicker.upload()` are all GM-gated), not something this server can bypass. The headless GM session exists precisely so a human can log in as a **Player** while `mcp-api` (or `FOUNDRY_HEADLESS_GM_USERNAME`) supplies that GM-tier session automatically in the background; check `get_health_status` if it still isn't connecting.
 - **Write Operations Rejected**: Verify `FOUNDRY_WRITE_ENABLED=true` is set and the Foundry user has Gamemaster or Assistant GM role.

@@ -101,6 +101,11 @@ When running in autonomous or semi-autonomous mode, execute this strict 5-stage 
 - When significant plot choices occur, update Obsidian notes with `mcpvault_patch_note` or `mcpvault_write_note`.
 - Record high-level narrative relationships in `memory_create_entities` and `memory_create_relations`.
 
+### 5. Canvas Tools Report "No Foundry Module Connected"
+- The server automatically maintains its own invisible, GM-tier browser session to host canvas tools (`capture_scene`, `roll_and_post`, `set_pause`, `upload_asset`, compendium search) — this needs no manual browser tab under normal operation.
+- If canvas tools report the bridge unavailable, call `foundryvtt_get_health_status` first — it reports the bridge connection state and, when disconnected, the headless session's own status line (still logging in, no browser found, wrong credentials, etc.).
+- NEVER attempt to fix this by directly driving the FoundryVTT desktop/Electron window via screen automation (clicking buttons, toggling module checkboxes, navigating menus) — a misclick there risks exiting the live world or disrupting the human's actual play session. Diagnose and fix from the server/config side only (env vars, restarting the MCP server process, checking logs) or ask the user to intervene in their own client.
+
 ---
 
 ## 🎭 Persona & Voice
