@@ -110,7 +110,9 @@ describe('handleLookupRule', () => {
             pages: [
               {
                 name: 'Combat',
-                text: { content: '<p>A Grapple action requires an Athletics check against target.</p>' },
+                text: {
+                  content: '<p>A Grapple action requires an Athletics check against target.</p>',
+                },
               },
             ],
           },
@@ -154,9 +156,9 @@ describe('handleLookupRule', () => {
 
   describe('edge cases', () => {
     it('throws McpError when query is empty string', async () => {
-      await expect(
-        handleLookupRule({ query: '' }, stubClient),
-      ).rejects.toThrow(/query is required/);
+      await expect(handleLookupRule({ query: '' }, stubClient)).rejects.toThrow(
+        /query is required/,
+      );
     });
 
     it('reports no rules found when neither source matches', async () => {

@@ -7,7 +7,9 @@ import type { FoundryClient } from '../../../foundry/client.js';
 import type { EventReadResult } from '../../../foundry/event-log.js';
 import { handleWatchEvents } from '../events.js';
 
-function buildClient(result: EventReadResult & { cursorResolvedFrom: 'now' | 'oldest' | 'explicit' }): FoundryClient {
+function buildClient(
+  result: EventReadResult & { cursorResolvedFrom: 'now' | 'oldest' | 'explicit' },
+): FoundryClient {
   return {
     watchEvents: vi.fn(async () => result),
   } as unknown as FoundryClient;

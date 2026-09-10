@@ -144,7 +144,10 @@ describe('handleRollAndPost', () => {
     expect(result.content[0].text).toContain('4d6kh3');
     expect(result.content[0].text).toContain('15');
     expect(result.content[0].text).toContain('Stat Roll');
-    expect(bridge.send).toHaveBeenCalledWith('roll_and_post', { formula: '4d6kh3', flavor: 'Stat Roll' });
+    expect(bridge.send).toHaveBeenCalledWith('roll_and_post', {
+      formula: '4d6kh3',
+      flavor: 'Stat Roll',
+    });
   });
 
   it('rejects missing formula', async () => {

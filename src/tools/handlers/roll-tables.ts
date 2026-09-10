@@ -85,7 +85,10 @@ export async function handleCreateRollTable(
     throw new McpError(ErrorCode.InvalidParams, 'name is required and must be a string');
   }
   if (!Array.isArray(results) || results.length === 0) {
-    throw new McpError(ErrorCode.InvalidParams, 'results is required and must be a non-empty array');
+    throw new McpError(
+      ErrorCode.InvalidParams,
+      'results is required and must be a non-empty array',
+    );
   }
 
   return withToolError('create roll table', async () => {

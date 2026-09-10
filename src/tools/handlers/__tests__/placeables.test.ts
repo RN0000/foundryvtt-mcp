@@ -9,23 +9,12 @@ import type { WorldScene } from '../../../foundry/types.js';
 import {
   handleCreateDrawing,
   handleCreateLight,
-  handleCreateNote,
   handleCreateSound,
   handleCreateTemplate,
-  handleDeleteDrawing,
   handleDeleteLight,
-  handleDeleteNote,
-  handleDeleteSound,
-  handleDeleteTemplate,
   handleUpdateLight,
 } from '../placeable-mutations.js';
-import {
-  handleListDrawings,
-  handleListLights,
-  handleListNotes,
-  handleListSounds,
-  handleListTemplates,
-} from '../scenes.js';
+import { handleListLights } from '../scenes.js';
 
 const SCENE_ID = 'sceneAAAAAAAAAAA';
 
@@ -96,7 +85,10 @@ describe('Placeable tool handlers', () => {
     const client = createMockClient({});
     await expect(handleUpdateLight({ lightId: '' }, client)).rejects.toThrow(McpError);
     const result = await handleUpdateLight({ lightId: 'light1', dim: 40 }, client);
-    expect(client.updateLight).toHaveBeenCalledWith(SCENE_ID, 'light1', { lightId: 'light1', dim: 40 });
+    expect(client.updateLight).toHaveBeenCalledWith(SCENE_ID, 'light1', {
+      lightId: 'light1',
+      dim: 40,
+    });
     expect(result.content[0].text).toContain('Ambient Light Updated');
   });
 
@@ -120,7 +112,12 @@ describe('Placeable tool handlers', () => {
     const client = createMockClient({});
     await expect(handleCreateDrawing({ x: Number.NaN, y: 0 }, client)).rejects.toThrow(McpError);
     const result = await handleCreateDrawing({ x: 100, y: 100, shape: 'c', radius: 50 }, client);
-    expect(client.createDrawing).toHaveBeenCalledWith(SCENE_ID, { x: 100, y: 100, shape: 'c', radius: 50 });
+    expect(client.createDrawing).toHaveBeenCalledWith(SCENE_ID, {
+      x: 100,
+      y: 100,
+      shape: 'c',
+      radius: 50,
+    });
     expect(result.content[0].text).toContain('Drawing Created');
   });
 

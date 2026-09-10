@@ -3,9 +3,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { summarizeDocumentBroadcast, WorldEventLog } from '../event-log.js';
 import type { WorldData } from '../types.js';
 import type { DocumentBroadcast } from '../world-cache.js';
-import { WorldEventLog, summarizeDocumentBroadcast } from '../event-log.js';
 
 function makeEvent(overrides: Partial<Parameters<WorldEventLog['append']>[0]> = {}) {
   return {

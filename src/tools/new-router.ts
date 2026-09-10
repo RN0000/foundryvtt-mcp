@@ -72,7 +72,7 @@ async function routeLegacyTool(
   args: Record<string, unknown>,
   foundryClient: FoundryClient,
   diagnosticsClient: DiagnosticsClient,
-  diagnosticSystem: DiagnosticSystem,
+  _diagnosticSystem: DiagnosticSystem,
 ) {
   switch (name) {
     // Actor tools

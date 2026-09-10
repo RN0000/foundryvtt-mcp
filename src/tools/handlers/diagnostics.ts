@@ -11,7 +11,6 @@ import { LogEntrySchema } from '../../diagnostics/types.js';
 import type { FoundryClient } from '../../foundry/client.js';
 import type { HeadlessGmSession } from '../../foundry/headless-gm-session.js';
 import type { ModuleBridge } from '../../foundry/module-bridge.js';
-import type { DiagnosticSystem } from '../../utils/diagnostics.js';
 import { withToolError } from './utils.js';
 
 /** Valid log levels recognized by the tool schema */
