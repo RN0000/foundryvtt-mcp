@@ -22,6 +22,7 @@ interface FakePage {
   click: Mock;
   waitForURL: Mock;
   url: Mock;
+  reload: Mock;
   close: Mock;
   /** Test helper: fires the captured `framenavigated` listener. */
   emitFrameNavigated: (url: string) => void;
@@ -69,6 +70,7 @@ function fakePage(state: {
     }),
     waitForURL: vi.fn().mockResolvedValue(undefined),
     url: vi.fn(() => state.url),
+    reload: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     emitFrameNavigated(url: string) {
       mainFrame.url = () => url;
@@ -286,5 +288,101 @@ describe('HeadlessGmSession', () => {
 
     await vi.advanceTimersByTimeAsync(60000);
     expect(page.goto).toHaveBeenCalledTimes(1);
+  });
+
+  describe('bridge-connectivity watchdog', () => {
+    async function loggedInSession(isBridgeConnected: () => boolean) {
+      const state = {
+        url: 'http://localhost:30000/join',
+        evaluateResult: true,
+        succeedOnClick: true,
+      };
+      const page = fakePage(state);
+      const browser = fakeBrowser(page);
+      launchMock.mockResolvedValue(browser);
+
+      const session = new HeadlessGmSession({
+        foundryUrl: 'http://localhost:30000',
+        username: 'mcp-api',
+        password: 'mcp',
+        isBridgeConnected,
+      });
+      await session.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.isActive()).toBe(true);
+      return { session, page };
+    }
+
+    it('does not reload while the bridge stays connected', async () => {
+      const { session, page } = await loggedInSession(() => true);
+
+      await vi.advanceTimersByTimeAsync(120000);
+      expect(page.reload).not.toHaveBeenCalled();
+
+      await session.stop();
+    });
+
+    it('reloads the page after the bridge stays down for the full grace window', async () => {
+      const { session, page } = await loggedInSession(() => false);
+
+      // Grace window is 3 ticks * 20s = 60s; under that, no reload yet.
+      await vi.advanceTimersByTimeAsync(40000);
+      expect(page.reload).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20000);
+      expect(page.reload).toHaveBeenCalledTimes(1);
+      expect(page.reload).toHaveBeenCalledWith({ waitUntil: 'domcontentloaded' });
+
+      await session.stop();
+    });
+
+    it('resets the down counter on a single connected tick, requiring a fresh full window', async () => {
+      let connected = false;
+      const { session, page } = await loggedInSession(() => connected);
+
+      await vi.advanceTimersByTimeAsync(40000); // 2 down ticks
+      connected = true;
+      await vi.advanceTimersByTimeAsync(20000); // 1 connected tick resets the counter
+      connected = false;
+      await vi.advanceTimersByTimeAsync(40000); // only 2 more down ticks since the reset
+      expect(page.reload).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(20000); // 3rd consecutive down tick
+      expect(page.reload).toHaveBeenCalledTimes(1);
+
+      await session.stop();
+    });
+
+    it('never starts the watchdog when isBridgeConnected is not provided', async () => {
+      const state = {
+        url: 'http://localhost:30000/join',
+        evaluateResult: true,
+        succeedOnClick: true,
+      };
+      const page = fakePage(state);
+      const browser = fakeBrowser(page);
+      launchMock.mockResolvedValue(browser);
+
+      const session = new HeadlessGmSession({
+        foundryUrl: 'http://localhost:30000',
+        username: 'mcp-api',
+        password: 'mcp',
+      });
+      await session.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(120000);
+      expect(page.reload).not.toHaveBeenCalled();
+
+      await session.stop();
+    });
+
+    it('stops polling once stop() is called', async () => {
+      const { session, page } = await loggedInSession(() => false);
+
+      await session.stop();
+      await vi.advanceTimersByTimeAsync(120000);
+      expect(page.reload).not.toHaveBeenCalled();
+    });
   });
 });

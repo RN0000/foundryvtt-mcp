@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-green.svg)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0%2B-blue.svg)](https://www.typescriptlang.org/)
-[![Vitest](https://img.shields.io/badge/Tests-728%20passing-brightgreen.svg)](https://vitest.dev/)
+[![Vitest](https://img.shields.io/badge/Tests-733%20passing-brightgreen.svg)](https://vitest.dev/)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-111-purple.svg)](https://modelcontextprotocol.io/)
 
 A comprehensive, production-grade [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server for **Foundry Virtual Tabletop (FoundryVTT)**.
@@ -76,7 +76,7 @@ The server employs a hybrid architecture to deliver real-time responsiveness and
 
 1. **Socket.IO Primary Connection**: Connects to FoundryVTT as an authenticated user (`mcp-api`). Automatically synchronizes and caches the world state, enabling instant lookups and high-frequency document mutations via the `modifyDocument` protocol.
 2. **Companion Module Bridge (`foundryvtt-mcp-bridge`)**: A lightweight Foundry module running in a browser that executes canvas-bound operations (PIXI canvas screenshot with grid overlay, native `Roll` chat card rendering, document schema introspection, and compendium item extraction). It only activates for a GM/Assistant-GM user — Foundry itself restricts pausing the game and uploading files to that tier, and a Player's canvas is fog-of-war-limited.
-3. **Automatic Headless GM Session**: The server drives its own invisible, background browser tab (via `playwright-core`, reusing whatever Chrome/Edge is already installed — no download required) that logs in as the same `mcp-api` account and hosts the module above. This means a human can play the game as a normal Player in their own visible client while the AI has full GM-tier canvas access through this separate, invisible session — no manual second browser tab required. Falls back gracefully (canvas-only tools report unavailable) if no browser is found; a manually-opened GM tab still works as before if preferred (set `FOUNDRY_HEADLESS_GM_ENABLED=false`).
+3. **Automatic Headless GM Session**: The server drives its own invisible, background browser tab (via `playwright-core`, reusing whatever Chrome/Edge is already installed — no download required) that logs in as the same `mcp-api` account and hosts the module above. This means a human can play the game as a normal Player in their own visible client while the AI has full GM-tier canvas access through this separate, invisible session — no manual second browser tab required. A watchdog polls the bridge's own connectivity independently of the Foundry login state and force-reloads the tab to recover a dropped module WebSocket (the module's own reconnect logic gives up permanently after ~85 minutes) — self-healing without a server restart. Falls back gracefully (canvas-only tools report unavailable) if no browser is found; a manually-opened GM tab still works as before if preferred (set `FOUNDRY_HEADLESS_GM_ENABLED=false`).
 4. **Optional REST API Module**: Provides server diagnostics, log retrieval, and health reporting when the local REST module is installed.
 
 ---
@@ -282,7 +282,7 @@ npm install
 # Compile TypeScript
 npm run build
 
-# Run complete unit test suite (728 tests)
+# Run complete unit test suite (733 tests)
 npm test
 
 # Run linter and formatting checks

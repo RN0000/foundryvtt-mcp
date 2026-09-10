@@ -125,6 +125,7 @@ class FoundryMCPServer {
         foundryUrl: config.foundry.url,
         username: headlessUsername,
         password: headlessPassword,
+        isBridgeConnected: () => this.moduleBridge?.isConnected() ?? false,
         ...(config.headlessGm.executablePath
           ? { executablePath: config.headlessGm.executablePath }
           : {}),
